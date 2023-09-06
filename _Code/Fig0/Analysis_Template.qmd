@@ -1,0 +1,80 @@
+---
+title: "Quarto markdown analysis template"
+author: "Niccolò Arecco"
+toc: true
+number-sections: true
+highlight-style: pygments
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-copy: true
+    theme:
+      light: flatly
+      dark: darkly
+editor: source
+bibliography: ../Paper_Analysis_References.bib
+---
+
+# Intro
+
+Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
+
+Write a concise introduction.
+
+# Set Up
+
+General info. For references do like this [@Schneider1990].
+
+## Packages
+
+Load packages required for the analysis and suppress any message. Check the @sec-sessioninfo section at the end for package versions.
+
+```{r, Loading required packages, warning = F, message = FALSE}
+library(dplyr, warn.conflicts = F, quietly = T)
+```
+
+## Functions
+
+Define a plot style.
+```{r, label = "ggplot themes", eval = T}
+
+```
+
+Helper functions for the  analysis
+```{r, funtions used in this analysis}
+
+```
+
+## Directories & File Paths
+
+Here I organise all the file and directories paths I need to run the analysis and define where to save the processed tables and figures.
+
+```{r, set paths and dicretories, warning = FALSE, message = FALSE}
+oneDrive_Dir <- file.path("~/OneDrive - CRG - Centre de Regulacio Genomica/Suz12_AS_project")  
+code_dir_fig <- file.path(oneDrive_Dir, "_Code/Fig0")
+tbl_dir_fig <- file.path(code_dir_fig, "tables")
+pdf_dir_fig <- file.path(code_dir_fig, "pdfs")
+
+if (!dir.exists(pdf_dir_fig)) { dir.create(pdf_dir_fig, recursive = T) }
+if (!dir.exists(tbl_dir_fig)) { dir.create(tbl_dir_fig, recursive = T) }
+```
+
+# Main Figure Panels
+
+Text and analysis code goes here.
+
+::: {.callout-note}
+Some important message 
+:::
+
+
+# Supplementary Figure Panels
+
+End analysis.
+
+# Session Info {#sec-sessioninfo}
+
+```{r, print session info}
+sessioninfo::session_info()
+```

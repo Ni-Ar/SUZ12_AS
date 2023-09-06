@@ -1,0 +1,1012 @@
+---
+title: "Figure 4 and supplementary figure 4"
+author: "Niccolò Arecco"
+toc: true
+number-sections: true
+highlight-style: pygments
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-copy: true
+    theme:
+      light: flatly
+      dark: darkly
+editor: source
+bibliography: ../Paper_Analysis_References.bib
+---
+
+Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
+
+# Intro
+
+We performed histone PTMs DIA MS and I analysed the raw files with EpiProfile v2.1 [@Yuan2018]. Here I parse the output and analyse the PTMs values with DEP.
+
+**Acknowledgement**: I'd like Zuo-Fei Yuan and Simone Sidoli from Ben Garcia lab for their help with data analysis and sample preparation respectively. Also a big thank you to Cristina Chiva from the CRG/UPF proteomics facility.
+
+# Set Up
+
+To fetch files on the CRG cluster I mount the server on my local computer with the following command in the terminal.
+
+```{bash, crgmnt, eval = F, echo = T}
+sshfs narecco@ant-login.linux.crg.es:/users/mirimia ~/mnt
+```
+
+## Packages
+
+Load packages required for the analysis and suppress any message. Check the @sec-sessioninfo section at the end for package versions.
+
+```{r, Loading required packages, warning = F, message = FALSE}
+library(dplyr, warn.conflicts = F, quietly = T)
+library(readr)
+library(readxl)
+# library(pheatmap)
+library(DEP)
+library(Cairo)
+library(DT)
+```
+
+Load my R package `niar` to use my custom made function to parse vast-tools output.
+```{r import my R package based available version, warning = FALSE}
+if ( ('niar' %in% .packages(all.available = TRUE)) == TRUE ) {
+  library('niar')
+} else if ( ('niar' %in% .packages(all.available = TRUE)) == FALSE ){
+  message("The package niar is not installed so I'm trying to load it from ",
+          "the local repository of the package")
+  if ( dir.exists('~/mnt/narecco/software/R/niar' ) )  {
+    devtools::load_all(path = '~/mnt/narecco/software/R/niar')
+  } else {
+    stop("Can't find the local repo of the niar package! ",
+         "You must install it with:\n",
+         "devtools::install_github('Ni-Ar/niar') ")
+  }
+} else{
+  stop("Can't understand if 'niar' package was installed beforehand")
+}
+```
+
+## Functions
+
+Define a plot style.
+```{r, label = "ggplot themes", eval = T}
+theme_classic(base_size = 6.3, base_family = "Arial") +
+  theme(plot.title = element_text(size = 8, vjust = -1, hjust = 0),
+        plot.background = element_blank(),
+        strip.background = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(linewidth = 0.1),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 5),
+        axis.text = element_text(colour = "black"),
+        axis.text.x = element_text(margin = margin(t = 0, unit = "mm")),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_line(linewidth = 0.1),
+        axis.ticks.length.y = unit(1, "mm"),
+        legend.margin = margin(l = 0, t = 0, unit = "mm"),
+        legend.box.margin = margin(l = 0, unit = "mm"),
+        legend.box.background = element_blank(),
+        legend.box.spacing = unit(0.5, "mm"),
+        # legend.title = element_blank(),
+        legend.text = element_text(margin = margin(l = -10, unit = "mm")),
+        legend.text.align = 0,
+        legend.key.height = unit(2, "mm"),
+        legend.key.width = unit(7.5, "mm"),
+        legend.key = element_blank(),
+        legend.background = element_blank(),
+        legend.spacing.x = unit(3, 'mm')
+        ) -> alluvial_thm 
+```
+
+I modify the `geom_stratum()` function just to add a very small linewidth the the black boders of the colums. With `linewidth = .05`, I don't have to change them manually later
+
+```{r, modify geom_stratum, echo = FALSE, eval = TRUE}
+rect_to_poly <- function(xmin, xmax, ymin, ymax) {
+  data.frame(
+    y = c(ymax, ymax, ymin, ymin, ymax),
+    x = c(xmin, xmax, xmax, xmin, xmin)
+  )
+}
+
+GeomStratum2 <- ggproto(
+  "GeomStratum2", GeomRect,
+  
+  required_aes = c("x", "y", "ymin", "ymax"),
+  
+  default_aes = aes(size = .05, linewidth = .05, linetype = 1, # modified by me to make border lines smaller
+                    colour = "black", fill = "white", alpha = 1),
+  
+  setup_data = function(data, params) {
+    
+    width <- params$width
+    if (is.null(width)) width <- 1/3
+    
+    transform(data,
+              xmin = x - width / 2,
+              xmax = x + width / 2)
+  },
+  
+  draw_panel = function(self, data, panel_params, coord,
+                        width = 1/3) {
+    # taken from GeomRect
+    
+    strat_aes <- setdiff(
+      names(data), c("x", "y", "xmin", "xmax", "ymin", "ymax")
+    )
+    
+    # construct polygon grobs
+    polys <- lapply(split(data, seq_len(nrow(data))), function(row) {
+      
+      poly <- rect_to_poly(row$xmin, row$xmax, row$ymin, row$ymax)
+      aes <- as.data.frame(row[strat_aes],
+                           stringsAsFactors = FALSE)[rep(1, 5), ]
+      
+      GeomPolygon$draw_panel(cbind(poly, aes, group = 1), panel_params, coord)
+    })
+    
+    # combine polygon grobs
+    grob <- do.call(grid::grobTree, polys)
+    grob$name <- grid::grobName(grob, "bar")
+    grob
+  },
+  
+  draw_key = draw_key_polygon
+)
+
+geom_stratum2 <- function(mapping = NULL,
+                         data = NULL,
+                         stat = "stratum",
+                         position = "identity",
+                         show.legend = NA,
+                         inherit.aes = TRUE,
+                         width = 1/3,
+                         na.rm = FALSE,
+                         ...) {
+  layer(
+    geom = GeomStratum2,
+    mapping = mapping,
+    data = data,
+    stat = stat,
+    position = position,
+    show.legend = show.legend,
+    inherit.aes = inherit.aes,
+    params = list(
+      width = width,
+      na.rm = na.rm,
+      ...
+    )
+  )
+}
+```
+
+Small function to parse the PTM abundance as 10 to the power scientific notion.
+```{r, funtions used in this analysis}
+scientific_10 <- function(x) {
+  parse(text=gsub("e\\+", " %*%10^", scales::scientific_format()(x)))
+}
+```
+
+## Directories & File Paths
+
+Here I organise all the file and directories paths I need to run the analysis and define where to save the processed tables and figures.
+
+```{r, set paths and dicretories, warning = FALSE, message = FALSE}
+oneDrive_Dir <- file.path("~/OneDrive - CRG - Centre de Regulacio Genomica/Suz12_AS_project")  
+code_dir_fig <- file.path(oneDrive_Dir, "_Code/Fig4")
+tbl_dir_fig4 <- file.path(code_dir_fig, "tables")
+pdf_dir_fig4 <- file.path(code_dir_fig, "pdfs")
+
+if (!dir.exists(pdf_dir_fig4)) { dir.create(pdf_dir_fig4, recursive = T) }
+if (!dir.exists(tbl_dir_fig4)) { dir.create(tbl_dir_fig4, recursive = T) }
+```
+
+```{r, DIA paths}
+metadata_path <- file.path(tbl_dir_fig4, 'Histone_PTMs_metadata.xlsx')
+
+WT_Dex4_histone_ratio_path <- list.files(tbl_dir_fig4,
+                                         pattern = "FullSet1_Run2_DIA_histone_ratios_Suz12dExon4.xls",
+                                         full.names = T)
+
+Resce_KO_histone_ratio_path <- list.files(tbl_dir_fig4,
+                                          pattern = "FullSet2_Run1_DIA_histone_ratios_Suz12KO.xls",
+                                          full.names = T)
+
+stopifnot(file.exists(metadata_path))
+stopifnot(file.exists(WT_Dex4_histone_ratio_path))
+stopifnot(file.exists(Resce_KO_histone_ratio_path))
+```
+
+# Main Figure Panels
+
+Import metadata.
+```{r define metadata factors}
+mtdt <- read_excel(metadata_path) |> 
+  setNames(c("Sample", "Short_Name", "Clone_Name", "Condition", "Replicate"))
+
+mtdt$Condition <- factor(mtdt$Condition, 
+                         levels = c("WT", "CSexon4", "Dexon4", "KO", "KO_L", "KO_S") )
+```
+
+
+## H3 K27-K40 peptide modification ratios
+
+Import DIA data quantification using automatic EpiProfile v2.1 quantifications.
+```{r read in EpiProfile output table, warning=FALSE, message=FALSE}
+read_EpiProfile_histone_ratio(WT_Dex4_histone_ratio_path) |>
+  left_join(y = mtdt, by = "Sample") |>
+  mutate(Facility_ID = Sample) |>
+  mutate(Sample = Short_Name) |>
+  tidy_hPTMs(split_double_PTMs = T) -> dia_auto_set1
+
+read_EpiProfile_histone_ratio(Resce_KO_histone_ratio_path) |>
+  left_join(y = mtdt, by = "Sample") |>
+  mutate(Facility_ID = Sample) |>
+  mutate(Sample = Short_Name) |>
+  tidy_hPTMs(split_double_PTMs = T) -> dia_auto_set2
+
+data_dia_auto <- rbind(dia_auto_set1, dia_auto_set2)
+```
+
+Tidy up the information for histone peptide H3 K27- K36. Here I split the H3 K27 and K36 signal coming form the same peptide. In this way I can pile up the all methyl-forms. 
+```{r}
+data_dia_auto |>
+  subset(Peptide_Start >= 27 & Peptide_End <= 40) |>
+  mutate(K27 = case_when( is.na(Sub_PTM1) & grepl(pattern = "^K27", x = Modification) ~ Modification,
+                          grepl(pattern = "unmod", x = Modification) ~ "unmod" ) ) |>
+  mutate(K36 = case_when( is.na(Sub_PTM2) & grepl(pattern = "^K36", x = Modification) ~ Modification, 
+                          grepl(pattern = "unmod", x = Modification) ~ "unmod" ) ) |>
+  relocate(K27, K36, .after = Sub_PTM2) |>
+  unite(col = "K27", c("Sub_PTM1", "K27"), sep = "", na.rm = T, remove = T ) |>
+  unite(col = "K36", c("Sub_PTM2", "K36"), sep = "", na.rm = T, remove = T ) |>
+  mutate(K27 = case_when(grepl(pattern = "^$", x = K27) ~ "unmod",
+                         grepl(pattern = "[aA-zZ]", x = K27) ~ K27 )) |>
+  mutate(K36 = case_when(grepl(pattern = "^$", x = K36) ~ "unmod",
+                         grepl(pattern = "[aA-zZ]", x = K36) ~ K36 )) |>
+  # When one mark is not found I label it unmodified ('unmod') but it could also
+  # be labelled as "only the other mark".
+  # mutate(K27 = case_when(grepl(pattern = "^$", x = K27) ~ "Only\nK36me",
+  #                        grepl(pattern = "[aA-zZ]", x = K27) ~ K27 )) |>
+  # mutate(K36 = case_when(grepl(pattern = "^$", x = K36) ~ "Only\nK27ac-me",
+  #                        grepl(pattern = "[aA-zZ]", x = K36) ~ K36 )) |>
+  relocate(K27, K36, .after = PTM) |>
+  mutate(Histone = factor(Histone, levels = c("H3", "H3.3") ) ) -> data_K27_36
+```
+
+I can also deconvolve the K27 and K36 signals from the same peptide and pile-up each signal.
+```{r, quant overall K27 in samples}
+data_K27_36 |>
+  group_by(Condition, K27, Histone) |>
+  mutate(Average_Ratio = mean(Ratio)) |>
+  mutate(K27 = factor(K27, levels = c("K27ac", "K27me3", "K27me2", "K27me1", "unmod") ) )|>
+  select(Histone, Condition, Average_Ratio, K27, Short_Name, Ratio) |>
+  mutate(Ratio_Sum = sum(Average_Ratio) / 3) |>
+  mutate(Percent = round(Average_Ratio*100, 2) ) |>
+  select(Condition, Histone, K27, Average_Ratio, Ratio_Sum, Percent) |>
+  unique() |>
+  mutate(across(.cols = where(is.numeric), \(x) round(x, 4) ) ) |>
+  arrange(Condition, Histone, K27) |> ungroup() -> data_K27
+```
+
+Same as above but for K36.
+
+```{r, quant overall K36 in samples}
+data_K27_36 |>
+  group_by(Condition, K36, Histone) |>
+  mutate(Average_Ratio = mean(Ratio)) |>
+  mutate(K36 = factor(K36, levels = c("K36me3", "K36me2", "K36me1", "unmod") ) ) |> 
+  select(Histone, PTM, Condition, Average_Ratio, K36, Short_Name, Ratio) |>
+  mutate(Ratio_Sum = sum(Average_Ratio) / 3) |>
+  mutate(Percent = round(Average_Ratio*100, 2) ) |>
+  select(Condition, Histone, K36, Average_Ratio, Ratio_Sum, Percent) |>
+  unique() |>
+  mutate(across(.cols = where(is.numeric), \(x) round(x, 4) ) ) |>
+  arrange(Condition, Histone, K36) |> ungroup() -> data_K36
+```
+
+For specific histone PTMs one can explore the results in the following tables.
+
+Overview of H3 and H3.3 K27 acetylation and methylation quantifications
+```{r, data table K27}
+datatable(data_K27, rownames = FALSE, filter = 'top', 
+          options = list(pageLength = 5, autoWidth = TRUE) )
+```
+
+Overview of H3 and H3.3 K36 methylation quantifications
+```{r, data table K36}
+datatable(data_K36, rownames = FALSE, filter = 'top', 
+          options = list(pageLength = 5, autoWidth = TRUE) )
+```
+
+### H3 K27
+
+Plot figure 4B panel with the pileup of figure H3K27 methylation and acetylation.
+
+```{r, plot pileup signal of H3K27me and ac, warning = TRUE, message = FALSE, fig.width = 2.5, fig.height = 1.86}
+data_K27_36 |>
+  group_by(Condition, K27, Histone) |>
+  mutate(Average_Ratio = mean(Ratio)) |>
+  summarise(Ratio_Sum = sum(Average_Ratio) / 3) |> # 3 replicates
+  subset(Histone %in% "H3") |>
+  mutate(K27 = factor(K27, levels = c("K27ac", "K27me3", "K27me2", "K27me1", "unmod") ) ) |>
+  ggplot() +
+  aes(x = Condition, stratum = K27, alluvium = K27, 
+      y = Ratio_Sum, fill = K27) +
+  geom_alluvium(alpha = 0.5, width = 0.4) +
+  geom_stratum2(alpha = 1, width = 0.6, colour = "black") +
+  geom_fit_text(aes(label = K27 ),
+                stat = "stratum", width = 0.6, min.size = 2,
+                padding.x = grid::unit(0.2, "mm"),
+                padding.y = grid::unit(0.2, "mm"),
+                size = 7, family = "Arial", show.legend = F) +
+  scale_fill_manual(values = c("K27ac" = "#feac81", "K27me1" ="#ced1af", 
+                               "K27me2" = "#748f46", "K27me3" = "#47632a", 
+                               "unmod" = "gray" ),
+                    name = 'H3') +
+  scale_x_discrete(expand = expansion(mult = 0.05, add = c(0, 0.1)),
+                   labels = c('WT', 'CSex4', '∆ex4', 'KO', 
+                              'KO+L', 'KO+S')) +
+  scale_y_continuous(expand = expansion(mult = 0, add = 0) ) +
+  guides(fill = guide_legend(byrow = TRUE) ) + # required for the legend item spacing 
+  labs(y = "Average Ratio") +
+  alluvial_thm -> p_Alluvial_K27
+
+p_Alluvial_K27 
+```
+
+Save to pdf.
+
+```{r}
+ggsave(filename = "Fig4B_H3_only_K27_Mrgd_Alluvial.pdf", path = pdf_dir_fig4, 
+       plot = p_Alluvial_K27, device = cairo_pdf, units = "cm",
+       width = 6.5, height = 4.85)
+```
+
+## Differential abbundance analysis of histone PTMs with DEP
+
+Use the area under the peak as counts to be analysed using DEP framework.
+```{r, warning = FALSE, message = FALSE}
+rbind( read_EpiProfile_histone_ratio(WT_Dex4_histone_ratio_path),
+       read_EpiProfile_histone_ratio(Resce_KO_histone_ratio_path) ) |>
+  left_join(y = mtdt, by = "Sample") |>
+  mutate(Facility_ID = Sample) |>
+  mutate(Sample = Short_Name) -> data_dia_auto_not_tidy
+```
+
+One small caveat is that the areas under the peaks are very large numbers or at least larger than `r .Machine$integer.max` which is the highest number `R` can store as integer. So to convert the areas to integers from numeric type one could use the package `bit64` that stores integers in 64 bits instead of the default 32 bit. My solution was however simpler, I divided the all table by `1000` to scale down by 3 order of magnitude. I then convert the dataframe to matrix.
+
+I tried to add a pseudocounts to the data but it actually doesn't help with the analysis and is better to input the areas as they are.
+The function `make_unique` is the first step of the analysis of DEP and creates a unique data frame.
+```{r, prepare data}
+data_dia_auto_not_tidy |>
+  tidy_hPTMs() |>
+  select(First_Col, PTM, Sample, Area) |>
+  # reduce all areas by a 1000 to avoid having to coerc to integer big numbers
+  mutate(Area = Area / 1e4) |>
+  pivot_wider(id_cols = c(First_Col, PTM), names_from = Sample, values_from = Area) |>
+  # Coerce the areas to integers
+  mutate(across(.cols = ends_with(c("_1", "_2", "_3")), .fns = as.integer )) |>
+  make_unique(names = "First_Col", ids = "PTM") -> data_unique
+```
+
+Create a metadata compatible for `DEP` set the KO as the reference sample as I'm interesting in the rescue efficiency relative to the KO.
+```{r, set metadata}
+# Set metadata colnames to be as `make_se` wants them to be 
+colnames(mtdt) <- c("Sample", "label", "Clone_Name", "condition", "replicate")
+
+mutate(mtdt, condition = factor(condition, levels = c("WT", "CSexon4", "Dexon4",
+                                                      "KO", "KO_L", "KO_S"))) |>
+  print(n = 1 ) -> mtdt_dep
+```
+
+Find the columns that contain the samples areas in the `data_unique` dataframe and create a `SummarizedExperiment` object to be used in for the `DEP` analysis. The first step is to do a log2 transformation of the area counts.
+
+```{r, make a se for DEP}
+Samples_area_columns <- grep(pattern = paste(mtdt_dep$label, collapse = "|"), colnames(data_unique))
+data_se <- make_se(data_unique, columns = Samples_area_columns, expdesign = mtdt_dep)
+```
+
+Now the `data_se` contains the modifications in the rows (assuming they are proteins) and in the column the area. 
+
+```{r, filter missing values}
+data_filt <- filter_missval(data_se, thr = 0)
+```
+
+
+Check PTMs frequency across samples.
+```{r}
+plot_frequency(data_filt)
+```
+
+Overall most modifications are found in all samples.
+
+```{r, vsn normalisation, message=FALSE}
+data_norm <- normalize_vsn(data_filt)
+```
+
+Verify the fit.
+```{r, mean SD plot}
+meanSdPlot(x = data_norm)
+```
+
+Seems okay.
+
+Check normalisation effect on data.
+```{r, check normalisations, fig.height = 10, fig.width = 7}
+plot_normalization(data_se, data_filt, data_norm) +
+  scale_fill_manual(values = c("WT" = "royalblue3", "Dexon4" = "goldenrod",
+                               "CSexon4" = "#B0461C", "KO" =  "gray45", 
+                               "KO_L" = "mediumpurple3", "KO_S" = "darkorange1")) +
+  theme(axis.text = element_text(color = 'black'),
+        plot.background = element_blank(), 
+        panel.background = element_blank())
+```
+Check missing values.
+
+```{r, missing values plot, fig.height = 6, fig.width = 5}
+plot_missval(data_norm)
+```
+
+I don't see obvious missing values trends, besides only that sample 3 of CSexon 3 has less PTMs detected. I don't think it' necessary to impute missing values.
+
+```{r, test diff}
+# Test every sample versus control
+data_diff <- test_diff(data_norm, type = "control", control = "WT")
+```
+
+Significance thresholds: 
+
+-   *P*-value <= 0.05
+
+-   |Log2 Fold Change| >= 1.5
+
+```{r, set thresolds}
+dep <- add_rejections(data_diff, alpha = 0.05, lfc = 1.5 )
+```
+
+Check sample clustering a Gower's distance matrix.s
+
+```{r, fig.height = 5, fig.width = 5}
+plot_dist(dep, significant = TRUE, pal = "PuOr") 
+```
+Check sample clustering.
+
+```{r, plot heatmap, fig.height = 5, fig.width = 5}
+plot_heatmap(dep, type = "centered", kmeans = F, clustering_distance = "gower",
+             col_limit = 4, show_row_names = TRUE,
+             indicate = c("condition", "replicate"))
+```
+
+Get results.
+
+```{r, get results}
+data_results <- get_results(dep)
+data_results |>
+  as_tibble() |>
+  select(-significant) |>
+  pivot_longer(cols = !c("name", "ID"),
+               names_to = c("contrast", "Feature"),
+               names_sep = c("_(vs_WT_|centered)"),
+               values_to = "Value"
+               ) |>
+  mutate(Feature = ifelse(test = Feature == "", yes = "centered", no = Feature)) |>
+  pivot_wider(names_from = "Feature", values_from = "Value") |>
+  dplyr::select(-ID) -> res_all_tidy
+
+colnames(res_all_tidy)[colnames(res_all_tidy) == "name"] <- 'First_Col'
+```
+
+Extract WT sample area of each PTM, to be used for the volcano plot.
+
+```{r, extract WT sample area of each PTM}
+data_dia_auto |>
+  subset(Condition == "WT") |>
+  group_by(First_Col) |>
+  mutate(WT_Mean_Area = mean(Area) + 1 ) |>
+  relocate(WT_Mean_Area, .after = PTM) |>
+  select(c(First_Col, WT_Mean_Area)) |>
+  unique() -> WT_area
+```
+
+Get the PTMs info columns.
+```{r, get ptms info}
+histone_ptms_anno <- unique(data_dia_auto[, 1:10])
+```
+
+Add all the info the the tidy results dataframe.
+```{r, add info to results}
+res_all <- left_join(x = res_all_tidy, y = histone_ptms_anno, by = join_by(First_Col))
+res_all <- left_join(res_all, WT_area, by = join_by(First_Col) )
+
+res_all |>
+  mutate(Histone = factor(Histone, levels = sort(unique(res_all$Histone)) ) ) |>
+  arrange(desc(Histone), Peptide_Start, Peptide_End) |>
+  ungroup() -> res_all
+```
+
+Export all tidy results for supplementary table 3 as tab delimited, or as csv with UTF-8 Byte order mark which indicates to Excel the csv is UTF-8 encoded.
+```{r, export all results to table}
+write_delim(x = res_all, file = file.path(tbl_dir_fig4, 'DEP_analysis_histone_MS.tab'), 
+            delim = '\t', col_names = T, append = F, quote = 'none', na = "NA",
+            progress = F, escape = 'none')
+
+write_excel_csv(x = res_all, 
+                file = file.path(tbl_dir_fig4, 'DEP_analysis_histone_MS.csv'),
+                 delim = ',', col_names = T, append = F, quote = 'none', 
+                na = "NA", progress = F, escape = 'none')
+```
+
+Interactively explore the table
+
+```{r, data table DEP results}
+res_all |>
+  mutate(across(.cols = where(is.numeric), \(x) round(x, 4) ) ) |>
+  datatable(rownames = FALSE, filter = 'top', 
+            options = list(pageLength = 3, autoWidth = TRUE) )
+```
+
+### PTMs centred abundances 
+
+Plot centred abundance
+```{r plot centered abundance of H3K27K36, fig.width = 7.5, fig.height =10}
+res_all |>
+  subset(Peptide_Start >= 27 & Peptide_End <= 40) |>
+  subset(!is.na(centered)) |>
+  ggplot(aes(x = centered, y = PTM, fill = contrast)) +
+  facet_grid(rows = vars(Modification), scales = 'free' ) +
+  geom_vline(xintercept = 0, linewidth = 0.4) + 
+  geom_col(width = 0.75, 
+           position = position_dodge(width = 0.75, preserve = 'single')) +
+  geom_point(aes(size = WT_Mean_Area),
+             shape = 21, position = position_dodge(width = 0.75),
+             stroke = 0.2) +
+  labs(x = "Centered PTM abundance") +
+  scale_x_continuous(limits = c(-5, 5), oob = scales::oob_squish ) +
+  scale_size_area(breaks = c(1e8, 1e9, 1e10, 1e11, 1e12),
+                  labels = scientific_10, name = "WT PTM\nabundance") +
+  scale_fill_manual(values = c("WT" = "royalblue3", "Dexon4" = "goldenrod",
+                               "CSexon4" = "#B0461C", "KO" =  "gray45", 
+                               "KO_L" = "mediumpurple3", "KO_S" = "darkorange1"),
+                    name = "Sample") +
+  theme_classic() +
+  theme(strip.text = element_blank(),
+        strip.background = element_blank(),
+        axis.text = element_text(colour = "black"),
+        axis.title.y = element_blank(),
+        legend.key.size = unit(1, 'mm'),
+        panel.grid.major.y = element_line()) -> p_centered_K27_K36
+
+p_centered_K27_K36
+```
+
+### Volcano plot ∆ex4 vs WT
+
+Prepare data for plot.
+
+```{r, prepare a res for Dexon4}
+res_Dex4 <- subset(res_all, contrast == "Dexon4" & !is.na(p.val))
+
+res_Dex4 <- res_Dex4 |>
+  mutate(Direction = case_when(p.adj <= 0.05 & ratio > 0 ~ 'UP',
+                              p.adj <= 0.05 & ratio < 0 ~ 'DOWN',
+                              p.adj > 0.05 ~ 'None') ) 
+```
+
+Plot figure 4C.
+```{r, plot for figure 4C, fig.width = 4.5, fig.height = 5 }
+ggplot(res_Dex4 ) +
+  aes(x = ratio, y = -log10(p.val), fill = Direction, size = WT_Mean_Area ) +
+  geom_point(shape = 21, stroke = 0.2) +
+    annotate(geom = "label", x = 5.5,  y = 0.10, label = "∆ex4", 
+           colour = "black", fill = "goldenrod", size = 2,
+           label.padding = grid::unit(0.5, "mm"), 
+           label.r = unit(0.25, "mm"), family = "Arial",
+           label.size = grid::unit(0.125, "mm") ) +
+  annotate(geom = "label", x = -5.5, y = 0.10, label = "WT", 
+           colour = "white",  fill = "royalblue3", size = 2, 
+           label.padding = grid::unit(0.5, "mm"), 
+           label.r = unit(0.25, "mm"), family = "Arial",
+           label.size = grid::unit(0.125, "mm") ) +
+  # points on the right side
+  geom_label_repel(data = subset(res_Dex4, p.adj < 0.09 & ratio > 0 ), 
+                   aes(label = PTM), fill = 'white',
+                   seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                   family = "Arial", size = 1.85, nudge_x = -0.25,
+                   segment.color = 'black',verbose = F, 
+                   box.padding = grid::unit(1, "mm"),
+                   point.padding = grid::unit(0.55, "mm"),
+                   label.padding = grid::unit(0.5, "mm"), 
+                   label.size = 0.120, 
+                   max.overlaps = 20)  +
+  # points on the left side
+  geom_label_repel(data = subset(res_Dex4,  p.adj < 0.1 & ratio < 0 ), 
+                 aes(label = PTM), fill = 'white',
+                 seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                 family = "Arial", size = 1.85, nudge_x = 0.25,
+                 segment.color = 'black',verbose = F, 
+                 box.padding = grid::unit(1, "mm"),
+                 point.padding = grid::unit(0.55, "mm"),
+                 label.padding = grid::unit(0.5, "mm"), 
+                 label.size = 0.120, 
+                 max.overlaps = 20)  +
+  labs(x = expression(log[2] ~ "Fold Change"), y = expression(-log[10] ~ "P-Value")) +
+  scale_fill_manual(values = c('dodgerblue', "gray84", "firebrick3"), guide = 'none') +
+  guides(size = guide_legend(override.aes = list(fill = "white"))) +
+  scale_x_continuous(expand = expansion(add = 0.02, mult = 0), limits = c(-6.4, 6.4), n.breaks = 7) +
+  scale_y_continuous(expand = expansion(add = c(0, 0.25), mult = 0), limits = c(0, NA)) +
+  scale_size_area(breaks = c(1e8, 1e9, 1e10, 1e11, 1e12),
+                  labels = scientific_10, name = "WT PTM\nabundance") +
+  theme_classic(base_size = 6, base_family = "Arial") +
+  theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_line(linewidth = 0.2),
+        legend.position = c(0.91, 0.87), 
+        legend.key = element_blank(),
+        legend.key.size = unit(1.0, units = 'mm'),
+        legend.text = element_text(size = 5, margin = margin(l = -1, r = -1, unit = 'mm')),
+        legend.direction = "vertical",
+        legend.background = element_blank(),
+        legend.box.background = element_blank(),
+        legend.box.spacing = unit(-3, 'mm'),
+        axis.text = element_text(colour = 'black'),
+        axis.ticks.length = unit(1, units = 'mm'),
+        axis.ticks = element_line(colour = 'black'),
+        axis.title = element_text(size = 5),
+        axis.line = element_line(linewidth = 0.2),
+        plot.background = element_blank() ) -> p_Dex4
+
+p_Dex4
+```
+
+Save to pdf.
+```{r, save fig 3C}
+ggsave(path = pdf_dir_fig4, filename = "Fig4C_Dex4_vs_WT_Volcano_w_labels.pdf",
+       plot = p_Dex4, device = cairo_pdf, units = "cm",
+       height = 5.4, width = 7.0)
+```
+
+### Other volcano plots 
+
+Prepare data of CSex4 vs WT
+
+```{r, prepare a res for CSexon4}
+res_CSex4 <- subset(res_all, contrast == "CSexon4" & !is.na(p.val))
+
+res_CSex4 <- res_CSex4 |>
+  mutate(Direction = case_when(p.adj <= 0.05 & ratio > 0 ~ 'UP',
+                              p.adj <= 0.05 & ratio < 0 ~ 'DOWN',
+                              p.adj > 0.05 ~ 'None') ) 
+```
+
+Note: nothing is differentially expressed in this contrast
+
+```{r, table CSex4}
+table(res_CSex4$Direction)
+```
+
+Prepare data of KO vs WT
+
+```{r, prepare a res for KO}
+res_KO <- subset(res_all, contrast == "KO" & !is.na(p.val))
+
+res_KO <- res_KO |>
+  mutate(Direction = case_when(p.adj <= 0.05 & ratio > 0 ~ 'UP',
+                              p.adj <= 0.05 & ratio < 0 ~ 'DOWN',
+                              p.adj > 0.05 ~ 'None') ) 
+```
+
+
+Plot KO vs WT
+```{r, Volcano plot KO, fig.width = 4.5, fig.height = 5 }
+ggplot(res_KO ) +
+  aes(x = ratio, y = -log10(p.val), fill = Direction, size = WT_Mean_Area ) +
+  geom_point(shape = 21, stroke = 0.2) +
+    annotate(geom = "label", x = 8.5,  y = 0.10, label = "KO", 
+           colour = "white", fill = "gray16", size = 2,
+           label.padding = grid::unit(0.5, "mm"), 
+           label.r = unit(0.25, "mm"), family = "Arial",
+           label.size = grid::unit(0.125, "mm") ) +
+  annotate(geom = "label", x = -12.5, y = 0.10, label = "WT", 
+           colour = "white",  fill = "royalblue3", size = 2, 
+           label.padding = grid::unit(0.5, "mm"), 
+           label.r = unit(0.25, "mm"), family = "Arial",
+           label.size = grid::unit(0.125, "mm") ) +
+  # points on the right side
+  geom_label_repel(data = subset(res_KO, p.adj <= 0.15 & ratio > 0 ), 
+                   aes(label = PTM), fill = 'white',
+                   seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                   family = "Arial", size = 1.85, nudge_x = -0.25,
+                   segment.color = 'black',verbose = F, 
+                   box.padding = grid::unit(1, "mm"),
+                   point.padding = grid::unit(0.55, "mm"),
+                   label.padding = grid::unit(0.5, "mm"), 
+                   label.size = 0.120, 
+                   max.overlaps = 20)  +
+  # points on the left side
+  geom_label_repel(data = subset(res_KO, p.adj <= 0.15 & ratio < 0 ), 
+                 aes(label = PTM), fill = 'white',
+                 seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                 family = "Arial", size = 1.85, nudge_x = 0.25,
+                 segment.color = 'black',verbose = F, 
+                 box.padding = grid::unit(1, "mm"),
+                 point.padding = grid::unit(0.55, "mm"),
+                 label.padding = grid::unit(0.5, "mm"), 
+                 label.size = 0.120, 
+                 max.overlaps = 20)  +
+  labs(x = expression(log[2] ~ "Fold Change"), y = expression(-log[10] ~ "P-Value")) +
+  scale_fill_manual(values = c('dodgerblue', "gray84", "firebrick3"), guide = 'none') +
+  guides(size = guide_legend(override.aes = list(fill = "white"))) +
+  scale_x_continuous(expand = expansion(add = 0.02, mult = 0), limits = c(-15, 10), n.breaks = 7) +
+  scale_y_continuous(expand = expansion(add = c(0, 0.25), mult = 0), limits = c(0, NA)) +
+  scale_size_area(breaks = c(1e8, 1e9, 1e10, 1e11, 1e12),
+                  labels = scientific_10, name = "WT PTM\nabundance") +
+  theme_classic(base_size = 6, base_family = "Arial") +
+  theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_line(linewidth = 0.2),
+        legend.position = 'right', 
+        legend.key = element_blank(),
+        legend.key.size = unit(1.0, units = 'mm'),
+        legend.text = element_text(size = 5, margin = margin(l = -1, r = -1, unit = 'mm')),
+        legend.direction = "vertical",
+        legend.background = element_blank(),
+        legend.box.background = element_blank(),
+        legend.box.spacing = unit(-3, 'mm'),
+        axis.text = element_text(colour = 'black'),
+        axis.ticks.length = unit(1, units = 'mm'),
+        axis.ticks = element_line(colour = 'black'),
+        axis.title = element_text(size = 5),
+        axis.line = element_line(linewidth = 0.2),
+        plot.background = element_blank() ) -> p_KO
+
+p_KO
+```
+
+Note: these WT and KO samples were processed at different moment, so there could be some batch effect difference that limits the statistical power.
+
+Save to pdf.
+```{r, save Volcano KO}
+ggsave(path = pdf_dir_fig4, filename = "KO_vs_WT_Volcano_w_labels.pdf",
+       plot = p_KO, device = cairo_pdf, units = "cm",
+       height = 12, width = 10)
+```
+
+
+::: {.callout-tip collapse="true" title="Things I could still add to this analysis"}
+I could still add:
+
+-   the rescues volcano plots vs the KO and KO+S vs KO+L
+
+-   rescue efficiency
+
+-   heatmap with all PTMs.
+
+:::
+
+# Supplementary Figure Panels
+
+## K27-K40 peptide modification ratios
+
+### H3.3K27
+
+There's no H3.3 signal in the main figure, here I plot only H3.3 signal.
+
+```{r, plot pileup signal of H3.3K27me and ac, warning = TRUE, message = FALSE, fig.width = 2.5, fig.height = 1.86}
+data_K27_36 |>
+  group_by(Condition, K27, Histone) |>
+  mutate(Average_Ratio = mean(Ratio)) |>
+  summarise(Ratio_Sum = sum(Average_Ratio) / 3) |>
+  subset(Histone %in% "H3.3") |>
+  mutate(K27 = factor(K27, levels = c("K27ac", "K27me3", "K27me2", "K27me1", "unmod") ) ) |>
+  ggplot() +
+  aes(x = Condition, stratum = K27, alluvium = K27, 
+      y = Ratio_Sum, fill = K27) +
+  geom_alluvium(alpha = 0.5, width = 0.4) +
+  geom_stratum2(alpha = 1, width = 0.6, colour = "black") +
+  geom_fit_text(aes(label = K27 ),
+                stat = "stratum", width = 0.6, min.size = 2,
+                padding.x = grid::unit(0.2, "mm"),
+                padding.y = grid::unit(0.2, "mm"),
+                size = 7, family = "Arial", show.legend = F) +
+  scale_fill_manual(values = c("K27ac" = "#feac81", "K27me1" ="#ced1af", 
+                               "K27me2" = "#748f46", "K27me3" = "#47632a", 
+                               "unmod" = "gray" ),
+                    name = 'H3.3') +
+  scale_x_discrete(expand = expansion(mult = 0.05, add = c(0, 0.1)),
+                   labels = c('WT', 'CSex4', '∆ex4', 'KO', 
+                              'KO+L', 'KO+S')) +
+  scale_y_continuous(expand = expansion(mult = 0, add = 0) ) +
+  guides(fill = guide_legend(byrow = TRUE) ) + # required for the legend item spacing 
+  labs(y = "Average Ratio") +
+  alluvial_thm -> p_Alluvial_H33K27
+
+p_Alluvial_H33K27 
+```
+
+Save to pdf.
+
+```{r, save fig S4B }
+ggsave(filename = "FigS4C_H3.3_only_K27_Mrgd_Alluvial.pdf", path = pdf_dir_fig4, 
+       plot = p_Alluvial_H33K27, device = cairo_pdf, units = "cm",
+       width = 6.5, height = 4.85)
+```
+
+### H3 and H3.3 K36
+
+Plot the pileup of H3 & H3.3 K36 methylation.
+
+```{r, plot pileup signal of H3K36me, warning = FALSE, message = FALSE, fig.width = 5, fig.height = 1.86}
+data_K27_36 |>
+  group_by(Condition, K36, Histone) |>
+  mutate(Average_Ratio = mean(Ratio)) |>
+  summarise(Ratio_Sum = sum(Average_Ratio) / 3) |>
+  subset(Histone == c("H3", "H3.3") ) |>
+  mutate(K36 = factor(K36, levels = c("K36me3", "K36me2", "K36me1", "unmod") ) ) |>
+  ggplot() +
+  aes(x = Condition, stratum = K36, alluvium = K36, 
+      y = Ratio_Sum, fill = K36) +
+  facet_wrap(~ Histone, scales = 'free_y') +
+  geom_alluvium(alpha = 0.5, width = 0.4) +
+  geom_stratum(alpha = 1, width = 0.6, linewidth = 0.1, colour = "black") +
+  geom_fit_text(aes(label = K36 ), stat = "stratum", width = 0.6, min.size = 2,
+                padding.x = grid::unit(0.2, "mm"), size = 7, family = "Arial",
+                padding.y = grid::unit(0.2, "mm"),
+                show.legend = F) +
+  scale_fill_manual(values = c("K36me1" = "#87B7AA", "K36me2" = "#8FA9C2",
+                               "K36me3" = "#8386B7", "unmod" = "gray" ) ) +
+  scale_x_discrete(expand = expansion(mult = 0.05, add = c(0, 0.1)),
+                   labels = c('WT', 'CSex4', '∆ex4', 'KO', 'KO+L', 'KO+S')
+                   ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = 0) ) +
+  guides(fill = guide_legend(byrow = TRUE) ) + # required for the legend item spacing 
+  labs(y = "Average Ratio") +
+  alluvial_thm +
+  theme(legend.title = element_blank()) -> p_Alluvial_K36
+
+p_Alluvial_K36
+```
+
+Save to pdf.
+```{r, save figure S c}
+ggsave(path = pdf_dir_fig4, filename = "FigS4D_H3_H3.3_K36_Mrgd_Alluvial.pdf",
+       plot = p_Alluvial_K36, device = cairo_pdf, units = "cm",
+       width = 12.0, height = 5)
+```
+
+## Extra plots
+
+Here I plot extra histone PTMs that were not included in the publication. 
+
+### H3 K4
+
+Plot H3K4 modifications.
+```{r, H3K4 plot, fig.width = 2.5, fig.height = 1.86}
+data_dia_auto |>
+  group_by(Condition, Modification) |>
+  subset(Peptide_Start >= 3 & Peptide_End <= 8) |>
+  mutate(Average_Ratio = mean(Ratio))  |>
+  summarise(Ratio_Sum = sum(Average_Ratio) / 3, .groups = 'keep') |>
+  ggplot() +
+  aes(x = Condition, stratum = Modification, alluvium = Modification, 
+      y = Ratio_Sum, fill = Modification) +
+  geom_alluvium(alpha = 0.4, width = 0.4) +
+  geom_stratum2(alpha = 1, width = 0.6, size = 0.1) +
+  geom_fit_text(aes(label = Modification ),
+                stat = "stratum", width = 0.6, min.size = 2,
+                padding.x = grid::unit(0.2, "mm"),
+                padding.y = grid::unit(0.2, "mm"),
+                size = 7, family = "Arial", show.legend = F) +
+  scale_fill_manual(values = met.brewer(name = "Demuth", direction = 1, n = 5), name = 'H3' ) +
+  scale_x_discrete(expand = expansion(mult = 0.05, add = c(0, 0.1)),
+                   labels = c('WT', 'CSex4', '∆ex4', 'KO', 
+                              'KO+L', 'KO+S')) +
+  scale_y_continuous(expand = expansion(mult = 0, add = 0) ) +
+  guides(fill = guide_legend(byrow = TRUE) ) + # required for the legend item spacing 
+  labs(y = "Average Ratio") +
+  alluvial_thm +
+  theme(legend.text = element_text(margin = margin(l = -9, unit = "mm")), 
+        legend.key.width = unit(6.5, "mm") ) -> p_Alluvial_K4
+
+p_Alluvial_K4
+```
+
+Save to pdf.
+
+```{r, save H3K4 to pdf}
+ggsave(path = pdf_dir_fig4, filename = "H3K4_Mrgd_Alluvial.pdf",
+       plot = p_Alluvial_K4, device = cairo_pdf, units = "cm",
+       width = 6.5, height = 4.85)
+```
+
+### H3 K9
+
+Plot all combinatorial K9 and K14 modifications on histone H3.
+```{r, H3K9, fig.width = 4, fig.height = 1.86}
+data_dia_auto |>
+  group_by(Condition, Modification) |>
+  subset(Histone == "H3") |>
+  subset(Peptide_Start >= 9 & Peptide_End <= 17) |>
+  mutate(Average_Ratio = mean(Ratio) ) |>
+  summarise(Ratio_Sum = sum(Average_Ratio) / 3, .groups = 'keep') |>
+  ggplot() +
+  aes(x = Condition, stratum = Modification, alluvium = Modification, 
+      y = Ratio_Sum, fill = Modification) +
+  geom_alluvium(alpha = 0.4, width = 0.4) +
+  geom_stratum2(alpha = 1, width = 0.6, size = 0.1) +
+  geom_fit_text(aes(label = Modification ),
+                stat = "stratum", width = 0.6, min.size = 2,
+                padding.x = grid::unit(0.2, "mm"),
+                padding.y = grid::unit(0.2, "mm"),
+                size = 7, family = "Arial", show.legend = F) +
+  scale_fill_manual(values = met.brewer(name = "Hokusai1", direction = -1, n = 15), name = 'H3' ) + 
+  scale_x_discrete(expand = expansion(mult = 0.05, add = c(0, 0.1)),
+                   labels = c('WT', 'CSex4', '∆ex4', 'KO', 
+                              'KO+L', 'KO+S')) +
+  scale_y_continuous(expand = expansion(mult = 0, add = 0) ) +
+  labs(y = "Average Ratio") +
+  alluvial_thm +
+  theme(legend.text = element_text(margin = margin(l = -12.0, unit = "mm")), 
+        legend.key.width = unit(11.2, "mm"),
+        legend.key.height = unit(1, 'mm'),
+        legend.spacing.x = unit(1, 'mm') ) -> p_Alluvial_K9
+
+p_Alluvial_K9
+```
+
+
+```{r, save K9 plot}
+ggsave(path = pdf_dir_fig4, filename = "H3K9_Mrgd_Alluvial.pdf",
+       plot = p_Alluvial_K9, device = cairo_pdf, units = "cm",
+       width = 6.4, height = 4.85)
+```
+
+### All combinations of H3/H3.3 K27 K36
+
+Plot all combinatorial K27 and K36 modifications on histone H3 and H3.3 variant.
+
+```{r combinatorial K27 and K36}
+data_dia_auto |>
+  group_by(Condition, Modification, Histone) |>
+  subset(Peptide_Start >= 27 & Peptide_End <= 40) |>
+  mutate(Average_Ratio = mean(Ratio))  |>
+  summarise(Ratio_Sum = sum(Average_Ratio) / 3, .groups = 'keep') |>
+  ggplot() +
+  aes(x = Condition, stratum = Modification, alluvium = Modification, 
+      y = Ratio_Sum, fill = Modification) +
+  facet_wrap(~ Histone) +
+  geom_alluvium(alpha = 0.4, width = 0.4) +
+  geom_stratum(alpha = 1, width = 0.6, size = 0.1) +
+
+  geom_fit_text(aes(label = Modification ),
+                stat = "stratum", width = 0.6, min.size = 2,
+                padding.x = grid::unit(0.2, "mm"),
+                padding.y = grid::unit(0.2, "mm"),
+                size = 7, family = "Arial", show.legend = F) +
+  scale_fill_manual(values = met.brewer(name = "Hiroshige", direction = 1, n = 15) ) +
+  scale_x_discrete(expand = expansion(mult = 0.05, add = c(0, 0.1)),
+                   labels = c('WT', 'CSex4', '∆ex4', 'KO', 
+                              'KO+L', 'KO+S'), name = 'H3 & H3.3') +
+  scale_y_continuous(expand = expansion(mult = 0, add = 0) ) +
+  labs(y = "Average Ratio") +
+  alluvial_thm +
+  theme(legend.text = element_text(margin = margin(l = -14.5, unit = "mm")), 
+        legend.key.width = unit(13.75, "mm"),
+        legend.key.height = unit(1, 'mm'),
+        legend.spacing.x = unit(1, 'mm') ) -> p_Alluvial_K27_K36
+
+p_Alluvial_K27_K36
+```
+
+This is the best representative picture of K27-K40 modifications relative abundance. 
+
+```{r, save all combinations K27-K36}
+ggsave(path = pdf_dir_fig4, filename = "H3_H3.3_K27_K36_Mrgd_Alluvial.pdf",
+       plot = p_Alluvial_K27_K36, device = cairo_pdf, units = "cm",
+       width = 14, height = 5)
+```
+
+End analysis.
+
+# Session Info {#sec-sessioninfo}
+
+```{r, print session info}
+sessioninfo::session_info()
+```

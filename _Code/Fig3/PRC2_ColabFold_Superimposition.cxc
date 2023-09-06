@@ -1,0 +1,136 @@
+## Open exon 4 inclusion prediction
+# Model rank 1
+open ~/mnt/narecco/projects/12_Predicted_Structures/data/pdb/CF/PRC2_ex4_inclusion/EZH2_*_relaxed_rank_001_*.pdb
+
+## Open exon 4 exclusion prediction
+# Model rank 1
+open ~/mnt/narecco/projects/12_Predicted_Structures/data/pdb/CF/PRC2_ex4_exclusion/EZH2_*_relaxed_rank_001_*.pdb
+
+# Superimpose structures
+match #2 to #1
+
+# Set overall appearance
+set bgColor white
+graphics silhouettes true width 1
+lighting soft depthCue f
+
+# Set starting position
+view name DEFAULT
+
+## Prepare MODEL 1
+# Calculate surfaces
+show #1 cartoons
+hide #1 atoms
+show #1 surface
+
+# Name Core components
+name EZH2inc #1/A
+name SUZ12inc #1/B
+name EEDinc #1/C
+name RBBP4inc #1/D
+name EXON4 #1/B:129-153
+name C2inc #1/B:154-363
+name KRKinc #1/B:195-197
+name R196inc #1/B:196
+name ACIDHOLEinc #1/D:126,128,179,181,231,248,275,277,319
+name PRC2inc #1/A/B/C/D
+
+# My Polycomb colour code
+color EZH2inc grey cartoons,surface,ribbons
+color SUZ12inc cyan cartoons,surface,ribbons
+color EEDinc silver cartoons,surface,ribbons
+color RBBP4inc dark grey cartoons,surface,ribbons
+color EXON4 red cartoons,surface,ribbons
+color PRC2inc dim grey cartoons,surface,ribbons
+show PRC2inc surface
+hide PRC2inc cartoon
+show C2inc cartoon,surface
+
+color C2inc #7b67ab cartoons,surface,ribbons
+transparency PRC2inc 60 surface
+transparency PRC2inc 0 cartoons
+
+transparency C2inc 60 surface
+transparency C2inc 0 cartoon
+
+show EXON4 cartoon,surface
+color EXON4 red cartoons,surface,ribbons
+transparency EXON4 60 surface
+transparency EXON4 0 cartoons
+
+## For sake of simplicity hide some unstructured N- & C-terminal tails
+hide #1/B:1-76 cartoons,surface,ribbons
+hide #1/B:696-739 cartoons,surface,ribbons
+hide #1/C:1-80 cartoons,surface,ribbons
+hide #1/D:1-30 cartoons,surface,ribbons
+hide #1/D:410-425 cartoons,surface,ribbons
+
+## For sake of simplicity hide some unstructured loops
+# connecting C2 domain with the rest of SUZ12 ZnF 
+hide #1/B:364-425 cartoons,surface,ribbons 
+# A long loop in SUZ12 C2 domain 
+hide #1/B:257-292 cartoons,surface,ribbons 
+# A long loop in EZH2
+hide #1/A:344-431 cartoons,surface,ribbons 
+
+## Prepare MODEL 2
+# Calculate surfaces
+show #2 cartoons
+hide #2 atoms
+show #2 surface
+
+# Name Core components
+name EZH2exc #2/A
+name SUZ12exc #2/B
+name C2exc #2/B:131-340
+name EEDexc #2/C
+name RBBP4exc #2/D
+name PRC2exc #2/A/B/C/D
+name KRKexc #2/B:172-174
+name R196exc #2/B:173
+name ACIDHOLEexc #2/D:126,128,179,181,231,248,275,277,319
+
+# My Polycomb colour code
+color EZH2exc grey cartoons,surface,ribbons
+color SUZ12exc cyan cartoons,surface,ribbons
+color EEDexc silver cartoons,surface,ribbons
+color RBBP4exc dark grey cartoons,surface,ribbons
+color PRC2exc light sky blue cartoons,surface,ribbons
+show PRC2exc surface
+hide PRC2exc cartoon
+transparency PRC2exc 60 surface
+transparency PRC2exc 0 cartoons
+
+color C2exc #f07e19 cartoons,surface,ribbons
+show C2exc surface,cartoon
+transparency C2exc 60 surface
+transparency C2exc 0 cartoon
+
+## For sake of simplicity hide some unstructured N- & C-terminal tails
+hide #2/B:1-76 cartoons,surface,ribbons
+hide #2/B:673-716 cartoons,surface,ribbons
+hide #2/C:1-80 cartoons,surface,ribbons
+hide #2/D:1-30 cartoons,surface,ribbons
+hide #2/D:410-425 cartoons,surface,ribbons
+
+## For sake of simplicity hide some unstructured loops
+# connecting C2 domain with the rest of SUZ12 ZnF 
+hide #2/B:341-402 cartoons,surface,ribbons 
+# A long loop in SUZ12 C2 domain 
+hide #2/B:234-269 cartoons,surface,ribbons 
+# A long loop in EZH2
+hide #2/A:344-431 cartoons,surface,ribbons 
+
+# set a good view
+windowsize 1260 960
+turn z -40
+turn x -40
+turn y 40
+move y 20
+zoom 1.15
+
+# Save current view
+view name POS1
+
+# save picture 
+save "~/OneDrive - CRG - Centre de Regulacio Genomica/Suz12_AS_project/_Code/Fig3/tiff/PRC2_ColabFold_ss4_Surf_Model_1_Fig3F.tiff" width 630 height 630 supersample 4 transparentBackground true

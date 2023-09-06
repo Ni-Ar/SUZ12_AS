@@ -1,0 +1,2487 @@
+---
+title: "Figure 2 and supplementary figure 2"
+author: "Niccolò Arecco & Ivano Mocavini"
+toc: true
+number-sections: true
+highlight-style: pygments
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-copy: true
+    theme:
+      light: flatly
+      dark: darkly
+editor: source
+bibliography: ../Paper_Analysis_References.bib
+---
+
+Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
+
+# Intro
+
+Using the `proteomicslfq` nextflow [@DiTommaso2017] pipeline I processed the thermo raw files I received from the [CRG/UPF proteomics facility](https://www.crg.eu/en/programmes-groups/crgupf-proteomics-unit) and calculate the peptide spectral matches (PSMs) against a protein database I build from Mouse UniProt (version 2022_03 3~th~ Aug 2022) using both canonical and alternative isoforms as well as common contaminants.
+
+The pipeline was run as following on the CRG cluster.
+
+```{bash, proteomicslqf nextflow command, echo = T, eval = F}
+nextflow run main.nf -profile singularity -with-tower -c crg.config -bg \
+                   --input "../data/raw/SUZ12IP_DExon4_WT/*.raw" \
+		               --database ../data/reference/proteome/Mouse_prot_database.fasta \
+                   --expdesign ../data/exp_design/Exon4_vs_WT_ESCs.tsv \
+                   --outdir Suz12_Dex4_WT --allowed_missed_cleavages 3 \
+                   --search_engines comet,msgf --enzyme Trypsin --num_hits 3 \
+                   --add_decoys --skip_post_msstats \
+                   --protein_quant 'shared_peptides' \
+                   --protein_inference 'bayesian' \
+                   --quantification_method 'spectral_counting'
+                   
+nextflow run main.nf -profile singularity -with-tower -c crg.config -bg \
+                   --input "../data/raw/SUZ12_FLAGIP_SKO_Rescues/SKO*.raw" \
+		               --database ../data/reference/proteome/Mouse_prot_database.fasta \
+                   --expdesign ../data/exp_design/Suz12KO_vs_Rescues_ESCs.tsv \
+                   --outdir Suz12_Flag_Rescues --allowed_missed_cleavages 3 \
+                   --search_engines comet,msgf --enzyme Trypsin --num_hits 3 \
+                   --add_decoys --skip_post_msstats \
+                   --protein_quant 'shared_peptides' \
+                   --protein_inference 'bayesian' \
+                   --quantification_method 'spectral_counting'
+```
+
+The parameter `--search_engines comet,msgf` indicates that the proteins are searched using MS-GF+ [@Kim2014] and Comet [@Eng2013] engines.
+
+The option `--protein_quant 'shared_peptides'` indicates to quantify proteins based on peptides mapping to single and multiple proteins too, but only mapping peptides greedily for its best group (by inference score). This inference is controlled by `--protein_inference 'bayesian'` that indicates in order to group proteins, it calculate scores on the protein (group) level and to potentially modify associations from peptides to proteins using bayesian statistics.
+
+The `--quantification_method 'spectral_counting'` indicated that spectral counting of PSMs is used to quantify the protein intensities.
+
+First I copy the output quantification pipeline `out.mzTab` files to a local folder.
+
+```{bash, copy proteomicslfq nextflow to oneDrive, eval = F, echo = T}
+mkdir -p ~/OneDrive\ -\ CRG\ -\ Centre\ de\ Regulacio\ Genomica/Suz12_AS_project/_Code/Fig2/tables
+
+cp ~/mnt/narecco/projects/07_Suz12AS/proteomicslfq/Suz12_Flag_Rescues/proteomics_lfq/out.mzTab ~/OneDrive\ -\ CRG\ -\ Centre\ de\ Regulacio\ Genomica/Suz12_AS_project/_Code/Fig2/tables/Suz12_Flag_Rescues.mzTab
+
+cp ~/mnt/narecco/projects/07_Suz12AS/proteomicslfq/Suz12_Dex4_WT/proteomics_lfq/out.mzTab ~/OneDrive\ -\ CRG\ -\ Centre\ de\ Regulacio\ Genomica/Suz12_AS_project/_Code/Fig2/tables/Suz12_Dex4_WT.mzTab
+```
+
+Now I process the PSMs using [`DEP` `R` package](https://bioconductor.org/packages/release/bioc/html/DEP.html) [@Zhang2018] to perform differential enriched proteins analysis.
+
+# Set Up
+
+## Packages
+
+Load packages required for the analysis and suppress any message. Check the @sec-sessioninfo section at the end for package versions.
+
+```{r Loading required packages, warning = F, message = FALSE}
+library(readr)
+library(readxl)
+library(tibble)
+library(tidyr)
+library(stringr)
+library(dplyr, warn.conflicts = F, quietly = T)
+library(ggplot2)
+library(ggrepel)
+library(ggsignif)
+library(viridis, quietly = T)
+library(plotly)
+library(SummarizedExperiment)
+library(Biostrings)
+library(MSnbase)
+library(UniprotR)
+library(DEP)
+library(knitr)
+
+options(dplyr.summarise.inform = F)
+```
+
+## Functions
+
+Define a plot style.
+
+```{r, label = "ggplot themes", eval = T}
+# Define the ggplot2 themes used for the figures.
+theme_classic(base_family = "Arial", base_size = 6) +
+  theme(axis.line = element_line(linewidth = 0.15, colour = "black"),
+        axis.text = element_text(colour = "black", size = 6),
+        axis.text.x = element_text(margin = margin(r = -2, unit = "mm")),
+        axis.title = element_text(colour = "black", size = 6),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(vjust = 1, 
+                                    margin = margin(r = 0, unit = 'mm')),
+        axis.ticks = element_line(colour = "black"),
+        axis.ticks.x = element_blank(),
+        axis.ticks.length.y = unit(1, units = "mm"),
+        strip.text.x = element_text(vjust = -1.5, size = 6),
+        strip.background = element_blank(),
+        legend.position = c(0.95, 0.85),
+        legend.title = element_blank(),
+        legend.text = element_text(colour = "black", size = 6),
+        legend.background = element_blank(),
+        legend.key.height = unit(x = 1, units = "mm"),
+        legend.key.width = unit(x = 1, units = "mm"),
+        panel.grid.major.y = element_line(colour = 'grey73', linewidth = 0.1),
+        panel.background = element_blank(),
+        plot.background = element_blank()) -> MSBar_plot_theme
+
+theme_classic(base_size = 6, base_family = "Arial") +
+    theme(axis.line = element_line(linewidth = 0.15, colour = "black"),
+          axis.text = element_text(colour = "black", size = 6),
+          axis.text.x = element_text(margin = margin(r = -2, unit = "mm")),
+          axis.title = element_text(colour = "black", size = 6),
+          axis.title.y = element_text(vjust = 1, 
+                                      margin = margin(r = 0, unit = 'mm')),
+          legend.position = "bottom",
+          legend.title = element_text(vjust = 1),
+          legend.background = element_blank(),
+          panel.grid.major = element_line(colour = 'grey73', linewidth = 0.1),
+          panel.background = element_blank(),
+          plot.background = element_blank()) -> pep_coverage_theme
+
+theme_classic(base_family = "Arial", base_size = 6) +
+  theme(legend.position = "none",
+        axis.line = element_line(linewidth = 0.15, colour = "black"),
+        axis.text = element_text(colour = "black", size = 6),
+        axis.title = element_text(colour = "black", size = 6),
+        axis.title.y = element_text(vjust = 1, 
+                                    margin = margin(r = 0, unit = 'mm')),
+        axis.ticks = element_line(colour = "black"),
+        axis.ticks.length = unit(1, units = "mm"),
+        strip.background = element_blank(),
+        panel.grid.major = element_line(colour = 'grey73', linewidth = 0.1),
+        plot.background = element_blank()) -> Volcano_plot_theme 
+```
+
+Parse PSM peptide signal in an MzTab file
+
+```{r, fun parse PSM from MzTab}
+read_psm_MzTab <- function(MzTab_path, POI_UniProtID, parse_accession = T) {
+  
+  
+  cols_to_keep <- c('sequence', 'PSM_ID', 'accession', 'modifications', 
+                    'retention_time', 'charge', 'exp_mass_to_charge',
+                    'calc_mass_to_charge','pre', 'post', 'start', 'end',
+                    'opt_global_Posterior_Error_Probability_score',
+                    'opt_global_q-value')
+  psm_raw <- readMzTabData(file = MzTab_path, what = "PSM", version = "1.0", verbose = T)
+  
+  fData(psm_raw) |> 
+    as_tibble() |>
+    mutate(is_target = grepl(pattern = POI_UniProtID, x = accession) ) |>
+    subset(is_target) |>
+    # use only uniquely mapping peptides
+    subset(unique == 1) |>
+    select(all_of(cols_to_keep)) -> psm
+    
+  # remove 'opt_global_' on the fly from the column names
+  colnames(psm) <- gsub('opt_global_', '', colnames(psm) )
+  colnames(psm) <- gsub('\\-', '_', colnames(psm) )
+  
+  psm |>
+    mutate(across( c(start, end), as.integer )) |>
+    arrange(start, end) -> psm
+  
+  if (parse_accession == TRUE) {
+    
+    psm |> 
+      mutate(SwissProt = str_split_fixed(string = accession, pattern = '\\|', n = 3)[,1],
+             UniProtID = str_split_fixed(string = accession, pattern = '\\|', n = 3)[,2],
+             Prot_Species = str_split_fixed(string = accession, pattern = '\\|', n = 3)[,3],
+             .before = accession) |>
+      mutate(Protein = str_remove(string = Prot_Species, pattern = '_MOUSE'),
+             .before = accession) |>
+      select(!c(SwissProt, Prot_Species, accession)) -> psm_tidy
+    
+    if ( length(unique(psm_tidy$UniProtID)) == 1 ) {
+      if ( unique(psm_tidy$UniProtID) != POI_UniProtID ) {
+        stop('Something is wrong with the UniProtID parsed from the accession')
+      } 
+    } else if( length(unique(psm_tidy$UniProtID)) >= 2) {
+      message('Parsed more than one UniProtID, double check the results!')
+    } else {
+      stop('Not sure how many UniProtID where parsed...' )
+    }
+    
+    
+  } else{
+    psm_tidy <- psm
+  }
+  
+  # remove start and end NA
+  psm_tidy <- subset(psm_tidy, !is.na(start))
+  psm_tidy <- subset(psm_tidy, !is.na(end))
+  
+  return(psm_tidy)
+}
+```
+
+Read Saint output data and tidy the data
+
+```{r, process saint }
+read_saint_peps <- function(saint_path, UniProtID, AA_exon_start, AA_exon_end, eoi_name = 'exonXYZ') {
+  peptides <- read_excel(path = saint_path, sheet = "Peptides", trim_ws = TRUE)
+  colnames(peptides) <- gsub("# ", "Num_", colnames(peptides))
+  colnames(peptides) <- gsub("\\+ ", "plus_", colnames(peptides))
+  colnames(peptides) <- gsub(": ", "_", colnames(peptides))
+  colnames(peptides) <- gsub(" ", "_", colnames(peptides))
+  colnames(peptides) <- gsub("Exp_Value_", "ExpValue_", colnames(peptides))
+  # rename _Area column
+  rename_area_col <- grep(pattern = "2_Area", x = colnames(peptides))
+  colnames(peptides)[rename_area_col] <- paste0("Area_", paste0(LETTERS[1:length(rename_area_col)], 2) )
+  # rename "score" column
+  rename_score_col <- grep(pattern = "^[A-F]4$", x = colnames(peptides))
+  colnames(peptides)[rename_score_col] <- paste0("Score_", colnames(peptides)[rename_score_col] )
+  # Remove number
+  colnames(peptides) <- gsub(pattern = "[2|4]$", "", colnames(peptides))
+
+  # Map peptides to proteins
+  Prot_seq <-  UniprotR::GetSequences(ProteinAccList = UniProtID)$Sequence
+  Prot_seq <- AAString(x = Prot_seq)
+  Prot_aa <- nchar(Prot_seq)
+  
+  # extract rows with Suz12 peptides
+  get_indx <- grep(pattern = UniProtID, x = peptides$Protein_Group_Accessions)
+  
+  Prot_pep <- peptides[get_indx, ]
+  pep_seq <- Prot_pep$Sequence
+  names(pep_seq) <- Prot_pep$Sequence
+  Prot_pep_seq <- AAStringSet(x = Prot_pep$Sequence, use.names = T)
+  
+  # Extract peptides coordinates on protein
+  # Which peptide gets mapped to Suz12 seq
+  whichPDict(pdict = Prot_pep_seq, 
+             subject = Prot_seq, 
+             max.mismatch = 0,
+             with.indels = F) -> peptides_mapped
+  
+  message(length(Prot_pep_seq), " peptides could map\n",
+          length(peptides_mapped), " actually map precisely")
+  
+  # Extract peptides interval in protein
+  matchPDict(pdict = Prot_pep_seq[peptides_mapped], 
+             subject = Prot_seq, 
+             max.mismatch = 0,
+  ) |> unlist() |> as.data.frame() |>
+    # Bind peptide coordinates to the sub table with all the info for each peptide
+    cbind(Prot_pep[peptides_mapped, ]) -> pep_cov
+  
+  # Add exon info
+  pep_cov <- mutate(
+    pep_cov,
+    Exon = case_when(
+      between(start, AA_exon_start, AA_exon_end) ~ eoi_name,
+      between(end, AA_exon_start, AA_exon_end) ~ eoi_name,
+      !between(start, AA_exon_start, AA_exon_end) ~ "other_exons",
+      !between(end, AA_exon_start, AA_exon_end) ~ "other_exons"
+    )
+  )
+  
+  return(pep_cov)
+}
+```
+
+Parse and map peptides positions
+
+```{r, function to turn peptide coverage in a res dataframe}
+cov2res_peptides <- function(pep_cov) {
+  pep_res <- pep_cov |>
+    dplyr::select(-starts_with("Score")) |>
+    pivot_longer(cols = starts_with(c("Area", "ExpValue", "IonScore")),
+                 names_sep = "_",
+                 names_to = c("Parameter", "Sample"), 
+                 values_to = "Value")
+  
+  pep_score <- pep_cov |>
+    dplyr::select(1:10, starts_with( c("Score", "Exon"))) |>
+    unique() |>
+    pivot_longer(cols = starts_with("Score"),
+                 names_to = "Sample",
+                 names_prefix = "Score_",
+                 values_to = "Score",
+    ) |>
+    select(12, 13, 1:3, 11, 4:10) |>
+    arrange(start)
+  
+  pep_res <- left_join(pep_res, pep_score, 
+                       by = join_by("start", "end", "width", "Sequence", "Num_PSMs",
+                                    "Num_Proteins", "Num_Protein_Groups",
+                                    "Protein_Group_Accessions", "Modifications",
+                                    "MHplus_[Da]", "Exon", "Sample")) |>
+    arrange(start) |>
+    relocate(Sample, .before = start)
+  # Factorize peptides sequences by their position in the protein
+  pep_res$Pep_Sequence <- pep_res$Sequence
+  pep_res$Pep_Sequence <- factor(pep_res$Pep_Sequence, 
+                                 levels = unique(rev(pep_res[order(pep_res$start),]$Sequence) ) )
+  return(pep_res)
+}
+```
+
+Little helper function to plot peptide counts in exon of interest
+
+```{r, count peptides in exon of interest}
+summary_exon_coverage <- function(pep_cov_df) {
+  pep_cov_df |>
+    select(Sequence, Num_PSMs, Exon) |>
+    unique() |>
+    group_by(Exon) |>
+    summarise( PSMs = sum(Num_PSMs), .groups = "drop") -> pep_cov_df
+    
+  sum_psms <- sum(pep_cov_df$PSMs)
+  add_row(pep_cov_df, Exon = "total_protein", PSMs = sum_psms) |>
+    setNames(c("Region", "Pepetide_Spectrum_Matches"))|>
+    as_tibble() -> summary_cov
+  
+  return(summary_cov)
+}
+```
+
+Plotting function for peptides coverage and exon of interest highlight.
+
+```{r, fun plot coverage peptides}
+plot_pep_cov <- function(df_res, AA_exon_start, AA_exon_end, Param_plot = 'Area') {
+  
+  subset(df_res, Parameter == Param_plot) |>
+    subset(!is.na(Value)) |>
+    subset(Value > 0 ) |>
+    ggplot()  + 
+    aes(x = start, xend = end, y = Sample_Name, yend = Sample_Name, color = Value) +
+    geom_segment(size = 1.5) +
+    geom_vline(xintercept = AA_exon_start, size = 0.2) +
+    geom_vline(xintercept = AA_exon_end, size = 0.2) +
+    labs(x = "Amino acids position", y = "") +
+    scale_x_continuous(expand = expansion(add = 0.1), 
+                       n.breaks = 10, breaks = waiver(), 
+                       limits = c(0, max(df_res$end)+1)) +
+    scale_colour_viridis(name = paste0("Peptide ", Param_plot),
+                         trans = "log10",
+                         breaks = c(1e7, 3e7, 1e8, 3e8, 1e9, 3e9, 1e10, 3e10) )  +
+    guides(colour = guide_colourbar(barwidth = grid::unit(12, "cm"), 
+                                    barheight = grid::unit(2, "mm") ) ) +
+    pep_coverage_theme -> p_coverage
+  
+    return(p_coverage)
+}
+```
+
+Helper functions for DEP analysis
+
+```{r, helper functions DEP analysis}
+# Function to extract number of DE proteins
+DE_prots <- function(results) {
+  tibble(Dataset = gsub("_results", "", results),
+         Num_Signif_Proteins = get(results) |> filter(significant) |> nrow(),
+         Proteins_Names = get(results) |> filter(significant) |> pull(name) 
+         |> paste0(collapse = " / ")
+         )
+}
+
+# Function that wraps around test_diff, add_rejections and get_results functions
+DE_analysis <- function(se, signif_thrshld = 0.05) {
+    data_diff <- test_diff(se, type = "manual", test = 'WT_vs_Dexon4')
+    res <- get_results(add_rejections(data_diff, alpha = signif_thrshld, lfc = 1.25))
+    return(res)
+}
+
+# Function to obtain ROC data
+get_ROC_df <- function(results) {
+  get(results) |>
+  select(name, WT_vs_Dexon4_p.val, significant) |>
+  mutate(
+    DE = grepl(T, significant),
+    BG = grepl(F, significant)) |>
+  arrange(WT_vs_Dexon4_p.val) -> tmp
+  
+  mutate(tmp,
+      TPR = cumsum(as.numeric(DE)) / length(which(tmp$DE)),
+      FPR = cumsum(as.numeric(BG)) / length(which(tmp$BG)),
+      method = results) -> tmp
+  return(tmp)
+}
+
+# Function that wraps around test_diff, add_rejections and get_results functions
+DE_analysis_KOrL_KOrS <- function(se, signif_thrshld = 0.05) {
+    data_diff <- test_diff(se, type = "manual", test = 'KOrL_vs_KOrS')
+    res <- get_results(add_rejections(data_diff, alpha = signif_thrshld, lfc = 1.5))
+    return(res)
+}
+```
+
+## Directories & File Paths
+
+Here I organise all the variables I need to run the analysis and define where to save the processed tables and figures.
+
+```{r, set paths and other parameters, warning = FALSE, message = FALSE}
+oneDrive_Dir <- file.path("~/OneDrive - CRG - Centre de Regulacio Genomica/Suz12_AS_project")  
+code_dir_fig2 <- file.path(oneDrive_Dir, "_Code/Fig2")
+
+tbl_dir_fig2 <- file.path(code_dir_fig2, "tables")
+pdf_dir_fig2 <- file.path(code_dir_fig2, "pdfs")
+
+if (!dir.exists(pdf_dir_fig2)) { dir.create(pdf_dir_fig2, recursive = T) }
+```
+
+Set path to the skyline output of the targeted proteomics experiment
+
+```{r, skyline target proteomics path}
+PRM_skyline_output_path <- file.path(tbl_dir_fig2, "PRM_Target_Proteomics_SkylineOutput.xlsx")
+```
+
+Set paths of IP-MS `mzTab` files.
+
+```{r, set up IP-MS paths}
+WT_Dex4_filename <- "Suz12_Dex4_WT"
+Resce_Suz12KO_filename <- "Suz12_Flag_Rescues"
+
+WT_Dex4_mzTAB_path <- list.files(tbl_dir_fig2, 
+                                 pattern = paste0(WT_Dex4_filename, ".mzTab"),
+                                 full.names = T)
+
+Resce_KO_mzTAB_path <- list.files(tbl_dir_fig2, 
+                                  pattern = paste0(Resce_Suz12KO_filename, ".mzTab"),
+                                  full.names = T)
+
+stopifnot(file.exists(WT_Dex4_mzTAB_path))
+stopifnot(file.exists(Resce_KO_mzTAB_path))
+```
+
+Import metadata for these experiments.
+
+```{r, path metadata}
+WT_Dex4_Metada_path <- list.files(tbl_dir_fig2, 
+                                   pattern = paste0(WT_Dex4_filename,
+                                                    "_Experimental_Design_Metadata.xlsx"),
+                                   full.names = T)
+
+Resce_KO_Metada_path <- list.files(tbl_dir_fig2, 
+                                   pattern = paste0(Resce_Suz12KO_filename,
+                                                    "_Experimental_Design_Metadata.xlsx"),
+                                   full.names = T)
+```
+
+Saint output file paths
+
+```{r, set up directories paths MS data}
+saint_path_WT_dEx4 <- file.path(tbl_dir_fig2, "Suz12_IP-MS_mESCs_WT_vs_dExon4_Saint.xlsx")
+saint_path_KO_Rescues <- file.path(tbl_dir_fig2, "Suz12_IP-MS_mESCs_Suz12KO_vs_Rescues_Saint.xlsx")
+stopifnot(file.exists(saint_path_WT_dEx4))
+stopifnot(file.exists(saint_path_KO_Rescues))
+```
+
+# Main Figure Panels
+
+## Targeted proteomic peptide abundance
+
+Define the peptides of specific to SUZ12-L, SUZ12-S and a well abundant common peptide.
+
+```{r, define pepties sequences}
+inclusio_peptide <- "TFKVDDMLSKVEK"
+skipping_peptide <- "SLSAHLQLTFTGFFHK"
+common_peptide <- "NLIAPIFLHR"
+```
+
+Import common peptide signal
+
+```{r, import prm common peptide area}
+peptides <- c(common_peptide, inclusio_peptide, skipping_peptide)
+Common_Precursor <- read_excel(path = PRM_skyline_output_path, 
+                               sheet = "Common_Peptide_Q80U70_E9PW18",
+                                ) |>
+  pivot_longer(cols = !c("Precursor_Ion"), names_sep = "_", 
+               names_to = c("Sample_Type", "Replicate"), values_to = "Area_Precursor") |>
+  subset(Replicate %in% c(2, 4))  |>
+  mutate(Sample_Type = ifelse(grepl(Replicate, pattern =  2), yes = "WT", no = "∆ex4"))  |>
+  select(c(Precursor_Ion, Sample_Type, Area_Precursor))
+```
+
+Import individual fragments areas extracted with Skyline [@MacLean2010].
+
+```{r, import skyline output with fragments areas}
+PRM <- read_excel(path = PRM_skyline_output_path, sheet = "Skyline_Output", 
+                  .name_repair = function(col){ gsub(" ", "_", col) } ) # change spaces to underscore
+```
+
+Calculate the fragments areas sum.
+
+```{r, calculate fragments area sums, warning = FALSE}
+PRM |>
+  subset(Replicate %in% c(2, 4)) |>
+  subset(Peptide %in% c(inclusio_peptide, skipping_peptide) ) |>
+  subset(Precursor_Charge == 3)  |>
+  subset(grepl("^y|b", x = Fragment_Ion)) |>
+  subset(Fragment_Ion != "y14") |>
+  mutate(Peak_Rank = Peak_Rank - 1) |>
+  mutate(Sample_Type = ifelse(grepl(Replicate, pattern =  2), yes = "WT", no = "∆ex4")) |>
+  mutate(Sample_Type = factor(Sample_Type, levels = c("WT", "∆ex4")) ) |>
+  group_by(Peptide, Replicate, Sample_Type) |>
+  select(c(Peptide, Replicate, Precursor_Charge, Fragment_Ion, Area, Peak_Rank, Sample_Type) ) |>
+  dplyr::summarise(Area_Sum = sum(Area)) |>
+  relocate(Sample_Type, .before = Peptide) -> framents_area_sum
+```
+
+Normalise the area sums to the area of the common SUZ12 isoforms precurson
+
+```{r, combine with common peptide}
+left_join(framents_area_sum, Common_Precursor, by = "Sample_Type" ) |>
+  mutate(Norm_Area = Area_Sum / (Area_Precursor/10^3)) |>
+  mutate(Peptide = factor(Peptide, levels = c(inclusio_peptide, skipping_peptide))) |>
+  mutate(Sample_Type = factor(Sample_Type, levels = c("WT", "∆ex4"))) -> PRM_areas
+```
+
+Plot Figure 2D.
+
+```{r,fig.height = 2, fig.width = 2.5}
+ggplot(PRM_areas)+
+  aes(x = Sample_Type, y = Norm_Area, fill = Peptide) +
+  facet_wrap(~Peptide, scale = "free_y") +
+  geom_col(show.legend = F, lwd = 0.1, colour = 'black', width = 0.75) +
+  scale_fill_manual(values = c("royalblue3", "goldenrod")) +
+  labs(y = "fragments / common peptide ") +
+  coord_cartesian(clip = 'off') +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.02), add = 0),
+                     n.breaks = 5) +
+  theme_classic(base_size = 6, base_family = "Arial") +
+  theme(panel.grid.major = element_line(linewidth = 0.15, colour = "gray84"),
+        axis.text = element_text(colour = "black"),
+        axis.title = element_text(size = 5),
+        axis.title.x = element_blank(),
+        axis.line = element_line(linewidth =  0.1),
+        plot.title = element_text(size = 5, hjust = 0.5, margin = margin(b = -1, unit = "mm")),
+        axis.ticks = element_line(linewidth = 0.1),
+        axis.ticks.x = element_blank(),
+        panel.background = element_blank(),
+        plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        strip.background.x = element_blank(),
+        strip.text = element_text(family = "Courier", size = 4),
+        strip.background = element_blank()) -> p_peptides_areas
+p_peptides_areas
+```
+
+Save bar plot to pdf.
+
+```{r, save figure 2D}
+ggsave(filename = "Fig2D_Norm_Peptides_Area_Barplot.pdf", plot = p_peptides_areas,
+       device = cairo_pdf, path = pdf_dir_fig2,  units = "cm",
+       width = 3.5, height = 2.8)
+```
+
+## WT and ∆exon4 Suz12 IP
+
+Here I analyse 2 datasets. First a Suz12 IP in mESCs of WT and ∆exon4 cell lines, then a Flag IP of Suz12 KO and Suz12 KO rescued with either long or short isoforms, also in mESCs.
+
+### Import PSMs from mzTab file
+
+From the `proteomicslfq` pipeline the important mzTAB file and do some tidying up of the data.
+
+```{r, import data from WT and dExon4 IP}
+prot_WT_Dex4 <- readMzTabData(file = WT_Dex4_mzTAB_path, what = "PRT", version = "1.0")
+
+exprs(prot_WT_Dex4) |>
+  as.data.frame() |>
+  rownames_to_column(var = "info") |>
+  setNames(c("info", "WTp", "WT#1", "WT#2", "dEX4#1", "dEX4#2", "dEX4#3") ) |>
+  tidyr::drop_na() |> 
+  mutate(swissprot = str_extract(pattern = "^[s-t][p|r]", string = info)) |>
+  # extract the UniProt ID while preserving alternative isoform ID (dashed number)
+  mutate(UniProtID = str_extract(pattern = "(?<=^[s-t][p|r].)[A0-Z9](.*?)\\.([1-9]?)", string = info)) |> 
+  mutate(UniProtID = sub(pattern = "\\.", replacement = "-", x = UniProtID)) |>
+  mutate(UniProtID = sub(pattern = "-$", replacement = "", x = UniProtID)) |>
+  # Extract species name
+  mutate(Species = str_extract(pattern = "_[A0-Z9](.*?)(?=\\.1)", string = info)) |>
+  mutate(Species = sub(pattern = "^_", replacement = "", x = Species)) |>
+  # Not really the protein name, it's an abbreviation used by uniprot
+  mutate(ProteinName = str_extract(pattern = "(?<=^[s-t][p|r]\\.[A0-Z9].....).*?\\.[A0-Z9](.*?)(?=_)",
+                                   string = info)) |>
+  mutate(ProteinName = str_remove(string = ProteinName, pattern = "(.*?)\\.")) |>
+  mutate(ProteinName = str_remove(string = ProteinName, pattern = "([1-9]?)\\.")) |>
+  mutate(ProteinName = gsub(pattern = "\\.", "-", x = ProteinName )) |>
+  mutate(ProteinName = str_to_title(string = ProteinName) ) -> tidy_prot_wt_dEx4
+```
+
+Here I manually fix 2 protein names. First Jarid2 is called `Jard2`, this is because it comes from `JARD2_MOUSE` name used by UniProt. The second is the protein called EED which in this experiment is mapped to the not so well annotated protein with ID [`A0A5F8MPX8`](https://www.uniprot.org/uniprotkb/A0A5F8MPX8/entry). After some digging into the `mzTAB` file I believe this is happening because the proteomics engines map the peptide `RLGAICDSGGGGGGGGAGSFAAGSGR` to `A0A5F8MPX8` which cannot be mapped to `EED` as this seems to be in a longer N-terminus stretch compared to the canonical EED.
+
+```{r fix some names}
+tidy_prot_wt_dEx4 |>
+  # Fix Jarid2 name that comes from JARD2_MOUSE
+  mutate(ProteinName = sub(pattern = "Jard2", replacement = "Jarid2", x = ProteinName)) |>
+  mutate(ProteinName = ifelse(test = UniProtID == "A0A5F8MPX8", yes = "Eed", no = ProteinName)) |>
+  relocate(swissprot, UniProtID, Species, ProteinName, .after = info) -> tidy_prot_wt_dEx4
+```
+
+Other mis-labelled protein is for example `A0A3B2WBM3` which actually corresponds to Elongin-B. Probably the mis-labelling is for the same reason, so I fix it like in the case of `Eed` adding the PSMs to the other `Elob` protein with UniProtID `P62869`.
+
+```{r add the 2 Elob coming from different UniProID}
+tidy_prot_wt_dEx4 |>
+  # Fix Elongin-B
+  mutate(ProteinName = ifelse(test = UniProtID == "A0A3B2WBM3", yes = "Elob", no = ProteinName)) |>
+  subset(ProteinName == "Elob") |>
+  mutate(across(.cols = c("WTp", "WT#1", "WT#2", "dEX4#1", "dEX4#2", "dEX4#3"), .fns = sum )) |>
+  # Of the 2 IDs keep only the sp one
+  subset(swissprot == "sp") -> tidy_Elob_sum
+
+# remove the Elob individual quantification and add the summed values
+tidy_prot_wt_dEx4 |>
+  subset(ProteinName != "Elob") |>
+  rbind(tidy_Elob_sum) -> tidy_prot_wt_dEx4
+```
+
+### Calculate a stoichiometry score for PRC2 proteins.
+
+Select PRC2 components.
+
+```{r define PRC2 compoments}
+core <- c("Suz12", "Eed", "Ezh2", "Rbbp7", "Rbbp4", "Ezh1" )
+PRC2.1 <- c("Mtf2", "Epop", "Phf19", "Elob", "Eloc") # Tceb = Elongin b/c
+PRC2.2 <- c("Jarid2", "Aebp2") # "Ezhip"
+PRC2 <- c(core, PRC2.1, PRC2.2)
+```
+
+Subset for these proteins.
+
+```{r subset for PRC2 in dataset 1}
+PRC2_prot_wt_dEx4 <- subset(tidy_prot_wt_dEx4, ProteinName %in% PRC2)
+```
+
+Use the `UniprotR` package to query UniProt and get protein length. This could be a bit time consuming.
+
+```{r get protein length from UniProt dataset1, message = FALSE}
+PRC2_prot_wt_dEx4$Protein_Length <- UniprotR::GetSequences(ProteinAccList = PRC2_prot_wt_dEx4$UniProtID)$Length
+```
+
+Reshape the data.
+
+```{r reshape data dataset1}
+PRC2_prot_wt_dEx4 |>
+  pivot_longer(cols = c(starts_with("WT"), starts_with("dEX4") ),
+               names_to = "Sample", values_to = "Spec") |>
+  mutate(Condition = case_when( grepl(x = Sample, pattern = "WT") ~ "WT",
+                                grepl(x = Sample, pattern = "dEX4") ~ "∆ex4") ) |>
+  relocate(Condition, .after = Sample) |>
+  mutate(Condition = factor(Condition, levels = c("WT", "∆ex4") )) |>
+  mutate(Spec = as.integer(Spec),
+         Norm_Spec = Spec / Protein_Length) -> spec_counts
+```
+
+Use Suz12 has a normalising factor.
+
+```{r}
+Su12_spec <- subset(spec_counts, ProteinName == "Suz12")
+colnames(Su12_spec)[colnames(Su12_spec) == "Norm_Spec"] <- "Bait_Norm_Spec"
+Su12_spec |> 
+  group_by(Condition) |>
+  mutate(Mean_Spec = mean(Bait_Norm_Spec, na.rm = T) ) -> Suz12_spec
+```
+
+Calculate the stoichiometry ratio relative to Suz12
+
+```{r}
+spec_counts |>
+  full_join(Suz12_spec[, c("Sample", "Mean_Spec")], by = "Sample") |>
+  group_by(Sample) |>
+  mutate(Ratio = Norm_Spec / Mean_Spec) |>
+  ungroup() |>
+  group_by(UniProtID, Condition) |>
+  mutate(Mean_Ratio = mean(Ratio, na.rm = T) ) |>
+  mutate(Sd_Ratio = sd(Ratio, na.rm = T) ) -> spec_ratio
+```
+
+Group proteins by PRC2 core or subgroup and calculate *p*-values with `t.test()`. Remove the embryonic Aebp2 isoform (`Q9Z248-3`) with very very low PSMs from this plot for sake of simplicity.
+
+```{r prepare for plot, warning = F, message = F}
+PRC2_data <- subset(spec_ratio, ProteinName %in% PRC2)
+PRC2_data <- subset(spec_ratio, UniProtID != "Q9Z248-3")
+
+# Subdivide by complex
+PRC2_data |>
+  mutate(Complex = case_when(ProteinName %in% core ~ "PRC2 Core",
+                             ProteinName %in% PRC2.1 ~ "PRC2.1",
+                             ProteinName %in% PRC2.2 ~ "PRC2.2",
+                             )) |>
+  relocate(Complex, .after = Condition) -> PRC2_data
+
+# Set decreasing plotting order
+PRC2_data |>
+  subset(Condition == "WT") |>
+  arrange(desc(Mean_Ratio)) |>
+  pull(ProteinName) |> unique() -> genes_order
+
+# Slight adjustment to have them in a miningful order 
+genes_order <- factor(genes_order, levels = PRC2)
+
+PRC2_data$ProteinName <- factor(PRC2_data$ProteinName, levels = PRC2)
+
+## calculate significance
+
+# Select genes with a mean ∆ stoichiometry ratio <= -0.1
+PRC2_data |>
+  group_by(ProteinName, Condition, Mean_Ratio) |>
+  summarise() |>
+  ungroup() |>
+  group_by(ProteinName) |>
+  mutate(Delta_Ratio = round(Mean_Ratio - Mean_Ratio[Condition == "WT"], 2)) |>
+  relocate(Delta_Ratio, .after = Condition) |>
+  arrange(Delta_Ratio) |>
+  subset(abs(Delta_Ratio) >= 0.1) |>
+  pull(ProteinName) -> genes_to_test
+
+PRC2_data |>
+  subset(ProteinName %in% genes_to_test) |>
+  group_by(ProteinName) |>
+  mutate(Pval = t.test(x = Ratio[Condition == "WT"], 
+                            y = Ratio[Condition == "∆ex4"], 
+                            exact = F, alternative = "two.sided")$p.value ) |>
+  mutate(Pval = signif(Pval, 2) ) |>
+  relocate(Pval, .after = Condition) |>
+  mutate(Y_Pos = max(Mean_Ratio + Sd_Ratio + 0.1)) |>
+  select(ProteinName, Condition, Complex, Pval, Mean_Ratio, Sd_Ratio, Y_Pos) |>
+  unique() |>
+  subset(Pval <= 0.05) -> signif_df
+```
+
+### SUZ12 WT ∆ex4 stoichiometry plot
+
+Plot figure 2F
+
+```{r plot figure 2F, warning = F, message = F, fig.width = 3.6, fig.height = 1.8}
+ggplot(PRC2_data) +
+  aes(x = ProteinName, y = Ratio, fill = Condition) +
+  facet_grid(~ Complex, scales = "free", space = 'free_x') +
+  geom_vline(xintercept = 6.5, colour = "black") +
+  geom_col(data = subset(PRC2_data, Sample %in% c("WTp", "dEX4#1" )), aes(y = Mean_Ratio),
+           position = position_dodge(width = 0.75), width = 0.75,
+           colour = "black", lwd = 0.125, show.legend = F) +
+  geom_errorbar(position = position_dodge(width = 0.75), 
+                aes(ymin = Mean_Ratio - Sd_Ratio, ymax = Mean_Ratio + Sd_Ratio),
+                width = 0.3, lwd = 0.125)+
+  geom_point(shape = 21,
+             position = position_jitterdodge(dodge.width = 0.75, jitter.width = 0.4, jitter.height = 0),
+             stroke = 0.16)  +
+  geom_signif(data = signif_df, inherit.aes = F, 
+              aes(xmin = ProteinName, xmax = ProteinName, y_position = Y_Pos, annotations = Pval ),
+              textsize = 2, family = "Arial", lwd = 0.125, manual = TRUE) +
+  # add axis vertical line to all facets.
+  annotate("segment", x = -Inf, xend = -Inf, y = -Inf, yend = Inf, lwd = 0.125) +
+  scale_fill_manual(values = c("WT" = "royalblue3", "∆ex4" = "goldenrod")) +
+  scale_y_continuous(expand = expansion(add = 0, mult = c(0, 0.05)),
+                     n.breaks = 6) +
+  scale_x_discrete(expand = expansion(mult = c(0.05, 0), add = 0) ) +
+  labs(y = "Stoichiometry") +
+  coord_cartesian(clip = 'on', ylim = c(0, 1.3) )  +
+  MSBar_plot_theme -> fig_2_barplot
+fig_2_barplot
+```
+
+Save plot to pdf.
+
+```{r, export fig 1G}
+ggsave(filename = "Fig2F_Stoichiometry_BarPlot.pdf", plot = fig_2_barplot, 
+       path = pdf_dir_fig2, device = cairo_pdf,
+       width = 8.75, height = 5.2, units = "cm")
+```
+
+### Differencial enrichment analysis of WT and ∆exon 4 Suz12
+
+How many high quality proteins are in this dataset?
+
+```{r}
+table(tidy_prot_wt_dEx4$swissprot)
+```
+
+Import metadata.
+
+```{r import metadata WT and dExon4 experiment}
+Resce_WT_Metada <- read_excel(path = WT_Dex4_Metada_path)
+Resce_WT_Metada$condition <- factor(Resce_WT_Metada$condition, 
+                                    levels = c("WT", "Dexon4") )
+```
+
+Create a summarised Experiment with the PSMs. The function `make_se` takes the PSMs counts and transforms them in log2 scale. So that values that are `1` become zero and values that were zero PSMs become `NA`.
+
+```{r create a summarised experiment first dataset }
+data_unique <- make_unique(tidy_prot_wt_dEx4, ids = "UniProtID", names = "ProteinName") 
+PSM_columns <- grep(pattern = paste(Resce_WT_Metada$label, collapse = "|"), colnames(data_unique))
+data_se <- make_se(data_unique, PSM_columns, Resce_WT_Metada)
+```
+
+```{r check protein freq}
+plot_frequency(data_se)
+```
+
+Filter a bit for not very abundant proteins.
+
+```{r filter WT and dExon4}
+data_filt <- filter_missval(data_se, thr = 0)
+```
+
+### Normalise the data
+
+Performs variance stabilizing transformation using `vsn`[package](http://bioconductor.org/packages/release/bioc/html/vsn.html) [@Huber2002].
+
+```{r, message=FALSE, warning=FALSE}
+data_norm <- normalize_vsn(data_filt)
+```
+
+Verify normalisation with `meanSdPlot()`
+
+```{r}
+meanSdPlot(x = data_norm) 
+```
+
+Looks good. Next check data filtering and normalisation impact on the PSM values
+
+```{r, fig.height=12}
+plot_normalization(data_se, data_filt, data_norm) +
+  scale_fill_manual(values = c("WT" = "royalblue3", "Dexon4" = "goldenrod")) +
+  theme(axis.text = element_text(color = 'black'),
+        plot.background = element_blank(), 
+        panel.background = element_blank())
+```
+
+### Impute missing values
+
+Check the missing values in the dataset.
+
+```{r}
+plot_missval(data_norm)
+```
+
+There aren't a lot of missing values but for consistency with the other dataset I impute the missing proteins values anyway.
+
+```{r}
+plot_detect(data_filt)
+```
+
+Impute missing values with different methods and then pick one. The imputation is performed on the dataset where proteins missing too many values were already filtered out (see `filter_missval` above), and on the `vsn` normalised data (see `normalize_vsn` above). For details on imputation algorithms check `?MsCoreUtils::impute_matrix()`.
+
+```{r}
+# Impute missing data using random draws from a 
+# Gaussian distribution centred around a minimal value (for MNAR: missing not at random )
+data_imp_min <- DEP::impute(data_norm, fun = "MinProb", q = 0.01)
+
+# Impute missing data using random draws from a 
+# manually defined left-shifted Gaussian distribution (for MNAR: missing not at random )
+data_imp_man <- DEP::impute(data_norm, fun = "man", shift = 1.8, scale = 0.3)
+
+# Impute missing data using the k-nearest neighbour approach (for MAR: missing at random)
+data_imp_knn <- DEP::impute(data_norm, fun = "knn", rowmax = 0.9)
+
+# Impute missing data using the Maximum likelihood-based imputation method using the EM algorithm (for MAR: missing at random)
+data_imp_mle <- DEP::impute(data_norm, fun = "MLE")
+
+## Add zero to missing data
+data_imp_zer <- DEP::impute(data_norm, fun = "zero")
+```
+
+Here I also try to impute missing values in a tailor made fashion, using a mixed model as described in the advanced section of the `DEP` [package vignette](https://bioconductor.org/packages/release/bioc/vignettes/DEP/inst/doc/MissingValues.html#advanced-imputation-methods).
+
+Here I consider a protein to have missing values **NOT** at random (MNAR) if it has missing values where the sum of the filtered, normalised PSMs across replicates is less than 1. Meaning that if a protein is detected as `NA`, `NA`, and `1` across 3 biological replicates of the ∆exon4 samples, the missing values (if any) will be set to the `minumum` value in the range (i.e. \~ -3).
+
+```{r advanced missing value imputation for WT datataset}
+get_df_long(data_norm) |>
+  group_by(name, condition) |>
+  summarize(Sum_PSMs = sum(intensity, na.rm = T), .groups = 'keep' ) |>
+  subset(condition == "Dexon4" )  |>
+  summarise(NAs = Sum_PSMs <= 1, .groups = 'keep') |>
+  subset(NAs)  |>
+  pull(name) |> unique() -> proteins_MNAR
+
+# Get a logical vector
+MNAR <- names(data_norm) %in% proteins_MNAR
+
+message("Identified: ", length(proteins_MNAR), " proteins missing NOT at random which will be min-imputed")
+
+# Perform a mixed imputation
+data_imp_mixed <- DEP::impute(data_norm, 
+                         fun = "mixed",
+                         randna = !MNAR, # we have to define MAR which is the opposite of MNAR
+                         mar = "knn", # imputation function for MAR
+                         rowmax = 0.9,
+                         mnar = "min") # imputation function for MNAR
+```
+
+Plot the protein intensity distribution of the original dataset with lots of missing values, the filtered, the normalised one, and the 3 different type of data imputation methods.
+
+```{r, fig.height = 12, fig.width = 7}
+plot_imputation(data_filt, data_norm, data_imp_mle, data_imp_knn, data_imp_mixed) +
+  scale_colour_manual(values = c("WT" = "royalblue3", "Dexon4" = "goldenrod")) +
+  theme(axis.text = element_text(color = 'black'),
+        legend.position = "bottom",
+        plot.background = element_blank(), 
+        strip.background = element_blank(),
+        panel.background = element_blank())
+```
+
+Between the mixed imputation and the `knn` imputation there's barely any difference. Good, it means that there're many missing values missing not at random.
+
+```{r, plot normalisation WT dEx4, fig.height = 10, fig.width = 6, message = F, warning=FALSE}
+plot_normalization(data_norm, data_imp_knn, data_imp_mixed) +
+  scale_fill_manual(values = c("WT" = "royalblue3", "Dexon4" = "goldenrod")) +
+  theme(axis.text = element_text(color = 'black'),
+        legend.position = "bottom",
+        plot.background = element_blank(), 
+        panel.background = element_blank())
+```
+
+Perform a PCA on the mixed imputed samples. As expected the samples major driver of diversity is the Suz12 antibody used (either homemade on the left or the commercial one on the right).
+
+```{r warning=FALSE, message=FALSE}
+plot_pca(data_imp_mixed, x = 1, y = 2, n = 500, point_size = 4) +
+  scale_colour_manual(values = c("WT" = "royalblue3", "Dexon4" = "goldenrod")) +
+  theme(plot.background = element_blank(), 
+        plot.title = element_blank(),
+        panel.background = element_blank()) 
+```
+
+Following the info in the [DEP vignette](https://bioconductor.org/packages/release/bioc/vignettes/DEP/inst/doc/MissingValues.html#test-for-differential-expression) I test which imputation method is the best.
+
+The methods I tested are:
+
+-   No imputation, but filtering and normalisation
+-   *MinProb* imputation
+-   *man* shifted Gaussian imputation
+-   *knn* imputation
+-   *MLE* imputation
+-   *zero* imputation
+-   Mixture of *min* for MNAR in Suz12 KO and *knn* for MAR
+
+For this comparison only I use a significant threshold of `0.05` and a log2 Fold Change higher than `|1.25|`.
+
+```{r, message = F, warning = F}
+# DE analysis on no, MinProb, man, knn, and MLE imputations
+no_imputation_res <- DE_analysis(data_norm)
+minprob_imputation_res <- DE_analysis(data_imp_min)
+man_imputation_res <- DE_analysis(data_imp_man)
+knn_imputation_res <- DE_analysis(data_imp_knn)
+mle_imputation_res <- DE_analysis(data_imp_mle)
+zer_imputation_res <- DE_analysis(data_imp_zer)
+mix_imputation_res <- DE_analysis(data_imp_mixed)
+```
+
+Check how many differential enriched proteins there are in each dataset.
+
+```{r}
+# Number of significant proteins
+objects <- c("no_imputation_res", "minprob_imputation_res", 
+             "man_imputation_res", "knn_imputation_res", 
+             "mle_imputation_res", "zer_imputation_res", 
+             "mix_imputation_res")
+
+kable(purrr::map_df(objects, DE_prots))
+```
+
+To further compare the results of the different imputation methods one could use ROC curves.
+
+```{r, ROC curves dataset 1}
+# Get ROC data 
+ROC_df <- purrr::map_df(objects, get_ROC_df)
+```
+
+Plot ROC
+
+```{r, plot ROC curves dataset 1}
+ggplot(ROC_df, aes(FPR, TPR, col = method)) +
+  geom_line() +
+  coord_cartesian(xlim = c(0, 0.1), ylim = c(0, 1)) +
+  labs(title = "ROC-curve") +
+  theme(axis.text = element_text(color = 'black'),
+        plot.background = element_blank(), 
+        strip.background = element_blank(),
+        panel.background = element_blank())
+
+```
+
+Basically all methods are good and show no significant improvement over no imputation of missing values. However for consistency with the other dataset I decided to use the mixed imputation method and get the final result table for the volcano plot.
+
+Consider significant everything with an FDR \<= 0.05 and a log2 fold change more than 1.5.
+
+```{r}
+# Test every sample versus control
+data_diff <- test_diff(data_imp_mixed, type = "control", control = "WT")
+
+# Denote significant proteins based on user defined cutoffs
+dep <- add_rejections(data_diff, alpha = 0.05, lfc = 1.5 )
+```
+
+Plot sample correlation and see that replicates have very good correlation
+
+```{r plot correlation}
+plot_cor(dep, significant = TRUE, lower = 0, upper = 1, pal = "PuOr") 
+```
+
+Check the intensity of the significant proteins found in the experiment
+
+```{r}
+plot_heatmap(dep, type = "centered", kmeans = F, 
+             col_limit = 4, show_row_names = TRUE,
+             indicate = c("condition", "replicate"))
+
+```
+
+Now plot the volcano plot results
+
+```{r, get results WT vs dExon4 dataset}
+data_results <- get_results(dep)
+```
+
+Select proteins to label and set fill colour for Aebp2 and Jarid2
+
+```{r}
+prot_to_label <- c("Aebp2", "Jarid2", "Ezh1", "Kmt2b", "Atpb")
+
+data_results <- mutate(data_results, 
+                       Label = ifelse(name %in% prot_to_label, yes = TRUE, no = FALSE),
+                       pretty_name = case_when(Label == TRUE ~ str_wrap(name, width = 10),
+                                         Label == FALSE ~ name) ) |>
+  mutate(Label_fill = case_when(name == "Aebp2" ~ "forestgreen",
+                                name == "Jarid2" ~ "hotpink", 
+                                !name %in% c("Aebp2", "Jarid2") ~ "white"))
+
+```
+
+### Volcano plot ∆exon4 vs WT Suz12 IP
+
+Plot figure 2E
+
+```{r, Plot volcano for figure 2E, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+ggplot(data = data_results) +
+  aes(x = Dexon4_vs_WT_ratio, y = -log10(Dexon4_vs_WT_p.val), 
+      fill = Dexon4_vs_WT_significant ) +
+  geom_point(shape = 21, show.legend = F, stroke = 0.16)  +
+  labs(x = expression(log[2] ~ "Fold Change"), y = expression(-log[10] ~ "P-Value")) +
+  coord_cartesian(xlim = c(-4.5, 3.0), ylim = c(0, 4.5),  clip = 'on') +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.01), add = c(0.02, 0.04)),
+                     n.breaks = 7) +
+  scale_x_continuous(n.breaks = 7, expand = expansion(add = 0, mult = 0)) +
+  Volcano_plot_theme -> p_basic_Volcano
+
+p_Volcano1 <- p_basic_Volcano + 
+  annotate(geom = "label", x = 2.25,  y = 0.35, label = "∆ex4", 
+           colour = "black", fill = "goldenrod", size = 2,
+           label.padding = grid::unit(0.5, "mm"), 
+           label.r = unit(0.25, "mm"), family = "Arial",
+           label.size = grid::unit(0.125, "mm") ) +
+  annotate(geom = "label", x = -3.5, y = 0.35, label = "WT", 
+           colour = "black",  fill = "royalblue3", size = 2, 
+           label.padding = grid::unit(0.5, "mm"), 
+           label.r = unit(0.25, "mm"), family = "Arial",
+           label.size = grid::unit(0.125, "mm") ) +
+  # points on the right side
+  geom_label_repel(data = subset(data_results, Label & Dexon4_vs_WT_ratio > 0 ), 
+                   aes(label = pretty_name, fill = Label_fill), 
+                   seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                   family = "Arial", size = 2, nudge_x = -0.25,
+                   segment.color = 'black',verbose = F, 
+                   box.padding = grid::unit(1, "mm"),
+                   point.padding = grid::unit(0.55, "mm"),
+                   label.padding = grid::unit(0.5, "mm"), 
+                   label.size = 0.125, 
+                   max.overlaps = 20)  +
+  # points on the left side
+  geom_label_repel(data = subset(data_results, Label & Dexon4_vs_WT_ratio < 0), 
+                 aes(label = pretty_name, fill = Label_fill), 
+                 seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                 family = "Arial", size = 2, nudge_x = 0.25,
+                 segment.color = 'black',verbose = F, 
+                 box.padding = grid::unit(1, "mm"),
+                 point.padding = grid::unit(0.55, "mm"),
+                 label.padding = grid::unit(0.5, "mm"), 
+                 label.size = 0.125, 
+                 max.overlaps = 20)  +
+  scale_fill_manual(values = c('gray84', "forestgreen", "hotpink", 'firebrick2', "white"))
+
+p_Volcano1
+```
+
+Save to pdf.
+
+```{r save volcano plot 1}
+ggsave(filename = "Fig2E_dExon4_vs_WT_Volcano.pdf", plot = p_Volcano1,
+       path = pdf_dir_fig2, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 5.25)
+```
+
+Make it interactive.
+
+```{r prepare for interactive volcano plot, warning=FALSE, message=FALSE}
+p_interactive_Volcano <- p_basic_Volcano +
+  geom_point(shape = 21, show.legend = F, aes(text = paste0(name)) ) +
+  scale_fill_manual(values = c("TRUE" = 'firebrick2', "FALSE" = 'gray84') ) +
+  labs(x = "log2 Fold Change", y = "-log10 P-Value")
+```
+
+Explore the volcano plot interactively.
+
+```{r display interactive volcano plot, fig.width=6, fig.height=7}
+ggplotly(p_interactive_Volcano)
+```
+
+Since I notice that Ezh1 and Kmt2b are significantly enriched but have a log2 Fold Change lower than 2 I explore their significance in the light of the fact that they are very low PSMs. To address this I make an MA plot like it's done for RNA-seq.
+
+```{r Calcualte mean PSM}
+assay(data_imp_mixed) |>
+  as.data.frame() |>
+  rownames_to_column("name") |>
+  pivot_longer(cols = !c("name"), names_to = "Sample", values_to = "Norm_PSMs") |>
+  mutate(Condition = case_when( grepl(x = Sample, pattern = "WT") ~ "WT",
+                                grepl(x = Sample, pattern = "Dexon4") ~ "∆ex4") ) |>
+  relocate(Condition, .after = Sample) |>
+  mutate(Condition = factor(Condition, levels = c("WT", "∆ex4") )) |>
+  group_by(name) |>
+  mutate(Mean_PSM = mean(Norm_PSMs, na.rm = T)) |>
+  select(name, Mean_PSM) |>
+  unique() |>
+  right_join(data_results, by = "name") |>
+  relocate(ID, .after = name) -> res_WT_Dexon4
+```
+
+```{r, echo=FALSE, eval=F}
+assay(dep) |>
+  as.data.frame() |>
+  rownames_to_column("name") |>
+  pivot_longer(cols = !c("name"), names_to = "Sample", values_to = "Norm_PSMs") |>
+  mutate(Condition = case_when( grepl(x = Sample, pattern = "WT") ~ "WT",
+                                grepl(x = Sample, pattern = "Dexon4") ~ "∆ex4") ) |>
+  relocate(Condition, .after = Sample) |>
+  mutate(Condition = factor(Condition, levels = c("WT", "∆ex4") )) |>
+  group_by(name) |>
+  mutate(Mean_PSM = mean(Norm_PSMs, na.rm = T)) |>
+  select(name, Norm_PSMs, Mean_PSM) |>
+  subset(name %in% c("Ezh1", "Kmt2b"))
+```
+
+Plot Mean PSMs vs log2 Fold Change.
+
+```{r, MA plot WT, fig.width = 7, fig.height = 3}
+res_WT_Dexon4 |>
+mutate(Label = ifelse(name %in% prot_to_label, yes = TRUE, no = FALSE),
+       pretty_name = case_when(Label == TRUE ~ str_wrap(name, width = 10), Label == FALSE ~ name) ) |>
+  mutate(Label_fill = case_when(name == "Aebp2" ~ "forestgreen",
+                                name == "Jarid2" ~ "hotpink", 
+                                !name %in% c("Aebp2", "Jarid2") ~ "white")) -> res_WT_Dexon4
+
+ggplot(res_WT_Dexon4) +
+  aes(x = Mean_PSM, y = Dexon4_vs_WT_ratio, fill = Dexon4_vs_WT_significant ) +
+  geom_point(shape = 21, show.legend = F, stroke = 0.16)  +
+  geom_hline(yintercept = 0, colour = "black") +
+  labs(x = expression(log[2] ~ "Mean PSM"), y = expression(-log[2] ~ "Fold Change")) +
+  scale_y_continuous(n.breaks = 7) +
+  scale_x_continuous(n.breaks = 7) -> p_basic_MA_plot
+
+p_basic_MA_plot +
+  # points on top
+  geom_label_repel(data = subset(res_WT_Dexon4, Label & Dexon4_vs_WT_ratio > 0 ), 
+                   aes(label = pretty_name, fill = Label_fill), 
+                   seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                   family = "Arial", size = 2, nudge_x = -0.25,
+                   segment.color = 'black',verbose = F, 
+                   box.padding = grid::unit(1, "mm"),
+                   point.padding = grid::unit(0.55, "mm"),
+                   label.padding = grid::unit(0.5, "mm"), 
+                   label.size = 0.125, 
+                   max.overlaps = 20)  +
+  # points on the bottom
+  geom_label_repel(data = subset(res_WT_Dexon4, Label & Dexon4_vs_WT_ratio < 0), 
+                 aes(label = pretty_name, fill = Label_fill), 
+                 seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                 family = "Arial", size = 2, nudge_x = 0.25,
+                 segment.color = 'black',verbose = F, 
+                 box.padding = grid::unit(1, "mm"),
+                 point.padding = grid::unit(0.55, "mm"),
+                 label.padding = grid::unit(0.5, "mm"), 
+                 label.size = 0.125, 
+                 max.overlaps = 20) +
+
+  scale_fill_manual(values = c('gray84', "forestgreen", "hotpink", 'firebrick2', "white")) +
+  Volcano_plot_theme -> p_MA_plot_WT_Dexon4
+p_MA_plot_WT_Dexon4
+```
+
+As one can see in fact both Ezh1 and Kmt2b (and Esco2) have very low PSMs (below 1). This means that they could be actually differentially bond to Suz12 WT and Suz12 ∆exon4 however their signal is so low it is hard to draw conclusions form it.
+
+Save to pdf.
+
+```{r save MA plot 1}
+ggsave(filename = "MAplot_dExon4_vs_WT.pdf", plot = p_MA_plot_WT_Dexon4,
+       device = cairo_pdf, path = pdf_dir_fig2, width = 4.5, height = 5.25, units = "cm")
+```
+
+```{r, make MA plot interactive, warning = FALSE}
+p_interactive_MA <- p_basic_MA_plot +
+  geom_point(shape = 21, show.legend = F, aes(text = paste0(name)) ) +
+  scale_fill_manual(values = c("TRUE" = 'firebrick2', "FALSE" = 'gray84') ) +
+  labs(x = "log2 Mean PSMs", y = "log2 Fold Change") +
+  Volcano_plot_theme 
+```
+
+I also made an interactive MA plot if one is interested in exploring more the proteins.
+
+```{r, show interactive MA plot, fig.width = 7, fig.height = 3}
+ggplotly(p_interactive_MA)
+```
+
+Now analyse the other dataset.
+
+```{r remove variables}
+rm(tidy_prot_wt_dEx4, PRC2_data, signif_df, spec_counts, spec_ratio, PRC2_prot_wt_dEx4, fig_2_barplot)
+```
+
+# Supplementary Figure Panels
+
+## Rescue and Suz12 KO Flag IPs
+
+Now perform the same analysis but on the other dataset.
+
+### Import PSMs from mzTab file for the rescue dataset
+
+```{r, import data rescue experiment}
+prot_Res_KO <- readMzTabData(file = Resce_KO_mzTAB_path, what = "PRT", version = "1.0")
+
+# tidy up the data
+exprs(prot_Res_KO) |>
+  as.data.frame() |>
+  rownames_to_column(var = "info") |>
+  setNames(c("info", "SKOrL_1", "SKOrL_2", "SKOrL_3",
+            "SKOrS_1", "SKOrS_2", "SKOrS_3", "SKO_1", "SKO_2", "SKO_3") ) |>
+  tidyr::drop_na() |> 
+  mutate(swissprot = str_extract(pattern = "^[s-t][p|r]", string = info)) |>
+  # extract the UniProt ID while preserving alternative isoform ID (dashed number)
+  mutate(UniProtID = str_extract(pattern = "(?<=^[s-t][p|r].)[A0-Z9](.*?)\\.([1-9]?)", string = info)) |> 
+  mutate(UniProtID = sub(pattern = "\\.", replacement = "-", x = UniProtID)) |>
+  mutate(UniProtID = sub(pattern = "-$", replacement = "", x = UniProtID)) |>
+  # Extract species name
+  mutate(Species = str_extract(pattern = "_[A0-Z9](.*?)(?=\\.1)", string = info)) |>
+  mutate(Species = sub(pattern = "^_", replacement = "", x = Species)) |>
+  # Not really the protein name, it's an abbreviation used by uniprot
+  mutate(ProteinName = str_extract(pattern = "(?<=^[s-t][p|r]\\.[A0-Z9].....).*?\\.[A0-Z9](.*?)(?=_)",
+                                   string = info)) |>
+  mutate(ProteinName = str_remove(string = ProteinName, pattern = "(.*?)\\.")) |>
+  mutate(ProteinName = str_remove(string = ProteinName, pattern = "([1-9]?)\\.")) |>
+  mutate(ProteinName = gsub(pattern = "\\.", "-", x = ProteinName )) |>
+  mutate(ProteinName = str_to_title(string = ProteinName) ) -> tidy_prot_rescue_KO
+```
+
+Here I manually fix 2 protein names like in the previous dataset. First Jarid2 is called `Jard2`, this is because it comes from `JARD2_MOUSE` name used by UniProt. The second is the protein called EED which in this experiment is mapped to the not so well annotated protein with ID [`A0A5F8MPX8`](https://www.uniprot.org/uniprotkb/A0A5F8MPX8/entry).
+
+```{r fix some names in dataset 2}
+tidy_prot_rescue_KO |>
+  # Fix Jarid2 name that comes from JARD2_MOUSE
+  mutate(ProteinName = sub(pattern = "Jard2", replacement = "Jarid2", x = ProteinName)) |>
+  mutate(ProteinName = ifelse(test = UniProtID == "A0A5F8MPX8", yes = "Eed", no = ProteinName)) |>
+  relocate(swissprot, UniProtID, Species, ProteinName, .after = info) -> tidy_prot_rescue_KO
+```
+
+### Calculate a stoichiometry score for PRC2 proteins in the rescue dataset
+
+Subset for these proteins.
+
+```{r}
+PRC2_prot_rescue_KO <- subset(tidy_prot_rescue_KO, ProteinName %in% PRC2)
+```
+
+Use the `UniprotR` package to query UniProt and get protein length. This could be a bit time consuming.
+
+```{r get protein length from UniProt, message=F, warning=FALSE}
+PRC2_prot_rescue_KO$Protein_Length <- UniprotR::GetSequences(ProteinAccList = PRC2_prot_rescue_KO$UniProtID)$Length
+```
+
+Reshape the data like before.
+
+```{r}
+PRC2_prot_rescue_KO |>
+  pivot_longer(cols = c(starts_with("SKO") ),
+               names_to = "Sample", values_to = "Spec") |>
+  mutate(Condition = case_when( grepl(x = Sample, pattern = "SKO_") ~ "KO",
+                                grepl(x = Sample, pattern = "SKOrS_") ~ "KOrS",
+                                grepl(x = Sample, pattern = "SKOrL_") ~ "KOrL") ) |>
+  relocate(Condition, .after = Sample) |>
+  mutate(Condition = factor(Condition, levels = c("KOrL", "KOrS", "KO") )) |>
+  mutate(Spec = as.integer(Spec),
+         Norm_Spec = Spec / Protein_Length) -> spec_counts
+```
+
+Use Suz12 has a normalising factor.
+
+```{r}
+Su12_spec <- subset(spec_counts, ProteinName == "Suz12")
+colnames(Su12_spec)[colnames(Su12_spec) == "Norm_Spec"] <- "Bait_Norm_Spec"
+Su12_spec |> 
+  group_by(Condition) |>
+  mutate(Mean_Spec = mean(Bait_Norm_Spec, na.rm = T) ) -> Suz12_spec
+```
+
+Calculate the stoichiometry ratio relative to Suz12.
+
+```{r}
+spec_counts |>
+  full_join(Suz12_spec[, c("Sample", "Mean_Spec")], by = "Sample") |>
+  group_by(Sample) |>
+  mutate(Ratio = Norm_Spec / Mean_Spec) |>
+  ungroup() |>
+  group_by(UniProtID, Condition) |>
+  mutate(Mean_Ratio = mean(Ratio, na.rm = T) ) |>
+  mutate(Sd_Ratio = sd(Ratio, na.rm = T) ) -> spec_ratio
+```
+
+Group proteins by PRC2 core or subgroup and calculate *p*-values with `t.test()`. Remove the embryonic Aebp2 isoform (`Q9Z248-3`) with very very low PSMs from this plot for sake of simplicity and also an Ezh1 variant (`P70351-2`).
+
+```{r prepare for plot 1, warning = F, message = F}
+PRC2_data <- subset(spec_ratio, ProteinName %in% PRC2)
+PRC2_data <- subset(PRC2_data, Condition != "KO")
+PRC2_data <- subset(PRC2_data, UniProtID != "Q9Z248-3")
+PRC2_data <- subset(PRC2_data, UniProtID != "P70351-2")
+
+# Subdivide by complex
+PRC2_data |>
+  mutate(Complex = case_when(ProteinName %in% core ~ "PRC2 Core",
+                             ProteinName %in% PRC2.1 ~ "PRC2.1",
+                             ProteinName %in% PRC2.2 ~ "PRC2.2",
+                             )) |>
+  relocate(Complex, .after = Condition) -> PRC2_data
+
+# Set decreasing plotting order as in previous plot
+PRC2_data$ProteinName <- factor(PRC2_data$ProteinName, levels = genes_order)
+
+## calculate significance
+
+# Select genes with a mean ∆ stoichiometry ratio <= -0.1
+PRC2_data |>
+  group_by(ProteinName, Condition, Mean_Ratio) |>
+  summarise() |>
+  ungroup() |>
+  group_by(ProteinName) |>
+  mutate(Delta_Ratio = round(Mean_Ratio - Mean_Ratio[Condition == "KOrL"], 2)) |>
+  relocate(Delta_Ratio, .after = Condition) |>
+  arrange(Delta_Ratio) |>
+  subset( !between(Delta_Ratio, left = -0.01, right = 0.01)) |>
+  pull(ProteinName) -> genes_to_test
+
+genes_to_test <- c("Ezh1", "Eloc", "Epop", "Phf19", "Jarid2", "Aebp2", "Ezhip")
+
+PRC2_data |>
+  subset(ProteinName %in% genes_to_test) |>
+  group_by(ProteinName) |>
+  mutate(Pval = t.test(x = Ratio[Condition == "KOrL"], 
+                            y = Ratio[Condition == "KOrS"], 
+                            exact = F, alternative = "two.sided")$p.value ) |>
+  mutate(Pval = signif(Pval, 2) ) |>
+  relocate(Pval, .after = Condition) |>
+  mutate(Y_Pos = max(Mean_Ratio+ Sd_Ratio + 0.1)) |>
+  select(ProteinName, Condition, Complex, Pval, Mean_Ratio, Sd_Ratio, Y_Pos) |>
+  unique() |>
+  subset(Pval <= 0.12) -> signif_df
+```
+
+### SUZ12 KO and Rescues stoichiometry plot
+
+For supplementary figure S2M
+
+```{r plot rescue bar ratio, warning = F, message = F, fig.width = 3.6, fig.height = 1.8}
+ggplot(PRC2_data) +
+  aes(x = ProteinName, y = Ratio, fill = Condition) +
+  facet_grid(~ Complex, scales = "free", space = 'free_x') +
+  geom_vline(xintercept = 6.5, colour = "black") +
+  geom_col(data = subset(PRC2_data, Sample %in% c("SKOrS_1", "SKOrL_1")), 
+           aes(y = Mean_Ratio),
+           position = position_dodge(width = 0.75), width = 0.75,
+           colour = "black", lwd = 0.125, show.legend = F) +
+  geom_errorbar(position = position_dodge(width = 0.75), 
+                aes(ymin = Mean_Ratio - Sd_Ratio, ymax = Mean_Ratio + Sd_Ratio),
+                width = 0.3, lwd = 0.125)+
+  geom_point(shape = 21, 
+             position = position_jitterdodge(dodge.width = 0.75, jitter.width = 0.4, jitter.height = 0), 
+             stroke = 0.16)  +
+  geom_signif(data = signif_df, inherit.aes = F,
+              aes(xmin = ProteinName, xmax = ProteinName, y_position = Y_Pos, annotations = Pval ),
+             textsize = 2, family = "Arial", lwd = 0.125, manual = TRUE) +
+  # add axis vertical line to all facets.
+  annotate("segment", x = -Inf, xend = -Inf, y = -Inf, yend = Inf, lwd = 0.125) +
+  scale_fill_manual(values = c("KOrL" = "mediumpurple3", "KOrS" = "darkorange1")) +
+  scale_y_continuous(expand = expansion(add = 0, mult = c(0, 0.05)),
+                     n.breaks = 6) +
+  scale_x_discrete(expand = expansion(mult = c(0.05, 0), add = 0) ) +
+  labs(y = "Stoichiometry") +
+  coord_cartesian(clip = 'on', ylim = c(0, 1.4))  +
+  MSBar_plot_theme -> fig_S2_barplot_rescues
+fig_S2_barplot_rescues
+```
+
+Save plot to pdf.
+
+```{r, export bar plot rescues for fig S2}
+ggsave(filename = "FigS2M_Stoichiometry_BarPlot.pdf", 
+       path = pdf_dir_fig2, plot = fig_S2_barplot_rescues, device = cairo_pdf,
+       units = "cm", width = 9.5, height = 5.2, )
+```
+
+### Differencial enrichment analysis of Suz12 KO and Long and Short Suz12 rescues
+
+Import metadata
+
+```{r import metadata rescue experiment}
+Resce_KO_Metada <- read_excel(path = Resce_KO_Metada_path)
+Resce_KO_Metada$condition <- factor(Resce_KO_Metada$condition, 
+                                    levels = c("KOrL", "KOrS", "KO") )
+```
+
+Create a summarised Experiment with the PSMs.
+
+```{r create a summarised experiment }
+data_unique <- make_unique(tidy_prot_rescue_KO, ids = "UniProtID", names = "ProteinName") 
+PSM_columns <- grep(pattern = paste(Resce_KO_Metada$label, collapse = "|"), colnames(data_unique))
+data_se <- make_se(data_unique, PSM_columns, Resce_KO_Metada)
+```
+
+Now I can use some of the plotting functions of `DEP` to explore the data.
+
+```{r}
+plot_frequency(data_se)
+```
+
+Test different filtering thresholds. The function `filter_missval` filters the dataset for proteins that have a maximum of `thr` missing values in at least one condition. If there are 3 biological replicates `thr = 0` means to keep only the proteins that are identified in all 3 replicates and `thr = 1` keeps all the proteins that are identified in at least 2 samples of each biological condition. I'll stick to `thr = 0` but I tried less stringent filter with little difference.
+
+```{r}
+data_filt <- filter_missval(data_se, thr = 0)
+data_filt2 <- filter_missval(data_se, thr = 1)
+data_filt3 <- filter_proteins(data_se, "fraction", min = 0.6)
+```
+
+Now the number of proteins identified is different
+
+```{r}
+plot_frequency(data_filt)
+```
+
+I can also check the number of proteins identified in each sample. For sure Suz12 KO rescued with Long Suz12 has the highest number of samples. And in general replicates have similar number of identified proteins.
+
+```{r}
+plot_numbers(data_filt) +
+  scale_fill_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
+  scale_y_continuous(n.breaks = 10)
+```
+
+Explore the data by dimensionality reduction.
+
+```{r pca, warning = FALSE}
+plot_pca(data_filt, x = 1, y = 2, n = 300, point_size = 4) +
+  scale_colour_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
+  theme(plot.background = element_blank(), 
+        plot.title = element_blank(),
+        panel.background = element_blank()) 
+```
+
+Sample separate well between each other.
+
+### Normalise the data
+
+Performs variance stabilizing transformation using `vsn`[package](http://bioconductor.org/packages/release/bioc/html/vsn.html). I do this on the dataset with filtered missing values default threshold (`thr = 0`).
+
+```{r, message = FALSE, warning = FALSE}
+data_norm <- normalize_vsn(data_filt)
+```
+
+```{r,  fig.width = 5, fig.height = 3}
+meanSdPlot(x = data_norm, ranks = T)
+```
+
+Check data filtering and normalisation impact on the PSM values
+
+```{r, fig.width = 10, fig.height = 8}
+plot_normalization(data_se, data_filt, data_norm) +
+  scale_fill_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
+  theme(axis.text = element_text(color = 'black'),
+        plot.background = element_blank(), 
+        panel.background = element_blank())
+```
+
+I think `vsn` normalisation is increasing too much the intensities in the Suz12 KO samples (grey).
+
+### Impute missing values
+
+Check the missing values in the dataset.
+
+```{r, fig.height = 10, fig.width = 8}
+plot_missval(data_norm)
+```
+
+As expected in MS proteomics experiments there are a lot of missing values, and this missing proteins are generally of low intensity. Here in this dataset, the Suz12 KO samples have most of the missing values and Suz12KO rescued with Short isoform to a certain extent. I believe this is because most of the proteins identified in the Suz12 KO are unspecific background proteins. This makes sense ad they're used as control and do not pull down Suz12.
+
+```{r}
+plot_detect(data_filt)
+```
+
+Impute missing values with different methods and then pick one. The imputation is performed on the dataset where proteins missing too many values were already filtered out (see `filter_missval` above), and on the `vsn` normalised data (see `normalize_vsn` above). For details on imputation algorithms check `?MsCoreUtils::impute_matrix()`.
+
+```{r}
+# Impute missing data using random draws from a 
+# Gaussian distribution centred around a minimal value (for MNAR: missing not at random )
+data_imp_min <- DEP::impute(data_norm, fun = "MinProb", q = 0.01)
+
+# Impute missing data using random draws from a 
+# manually defined left-shifted Gaussian distribution (for MNAR: missing not at random )
+data_imp_man <- DEP::impute(data_norm, fun = "man", shift = 1.8, scale = 0.3)
+
+# Impute missing data using the k-nearest neighbour approach (for MAR: missing at random)
+data_imp_knn <- DEP::impute(data_norm, fun = "knn", rowmax = 0.9)
+
+# Impute missing data using the Maximum likelihood-based imputation method using the EM algorithm (for MAR: missing at random)
+data_imp_mle <- DEP::impute(data_norm, fun = "MLE")
+
+## Add zero to missing data
+data_imp_zer <- DEP::impute(data_norm, fun = "zero")
+
+```
+
+Here I also try to impute missing values in a tailor made fashion, using a mixed model as described in the advanced section of the `DEP` [package vignette](https://bioconductor.org/packages/release/bioc/vignettes/DEP/inst/doc/MissingValues.html#advanced-imputation-methods).
+
+Here I consider a protein to have missing values **NOT** at random (MNAR) if it has missing values in all replicates of Suz12 KO condition or if the sum of the filtered, not-normalised PSMs across replicates is less than 1. Meaning if a protein is detected as `NA`, `NA`, and `1` in 3 biological replicates of Suz12 KO, the missing values to be set to the `minumum` value in the range (i.e. \~ -3).
+
+```{r, advanced missing value imputation}
+get_df_long(data_filt) |>
+  group_by(name, condition) |>
+  summarize(Sum_PSMs = sum(intensity, na.rm = T), .groups = 'keep' ) |>
+  subset(condition == "KO") |>
+  summarise(NAs = Sum_PSMs <= 1, .groups = 'keep') |>
+  subset(NAs) |>
+  pull(name) |> unique() -> proteins_MNAR
+
+message("Identified: ", length(proteins_MNAR), " proteins missing NOT at random which will be zero-imputed")
+
+# Get a logical vector
+MNAR <- names(data_norm) %in% proteins_MNAR
+
+# Perform a mixed imputation
+data_imp_mixed <- DEP::impute(data_norm, 
+                         fun = "mixed",
+                         randna = !MNAR, # we have to define MAR which is the opposite of MNAR
+                         mar = "knn", # imputation function for MAR
+                         rowmax = 0.9,
+                         mnar = "min") # imputation function for MNAR
+```
+
+Plot the protein intensity distribution of the original dataset with lots of missing values, the filtered, the normalised one, and the 3 different type of data imputation methods.
+
+```{r, fig.height = 12, fig.width = 7}
+plot_imputation(data_se, data_filt, data_imp_mle, data_imp_knn, data_imp_mixed) +
+  scale_colour_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
+  theme(axis.text = element_text(color = 'black'),
+        legend.position = "bottom",
+        plot.background = element_blank(), 
+        strip.background = element_blank(),
+        panel.background = element_blank())
+```
+
+One can see how there's a zero-inflation for Suz12 KO intensities in the mixed model.
+
+```{r, fig.height = 10, fig.width = 6, message = F, warning=FALSE}
+plot_normalization(data_norm, data_imp_knn, data_imp_mixed) +
+  scale_fill_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
+  theme(axis.text = element_text(color = 'black'),
+        legend.position = "bottom",
+        plot.background = element_blank(), 
+        panel.background = element_blank())
+```
+
+Do a dimensionality reduction just to check that the imputation still preserves good sample relationships.
+
+```{r warning=FALSE, message=FALSE}
+plot_pca(data_imp_mixed, x = 1, y = 2, n = 500, point_size = 4) +
+  scale_colour_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
+  theme(plot.background = element_blank(), 
+        plot.title = element_blank(),
+        panel.background = element_blank()) 
+```
+
+Following the info in the [DEP vignette](https://bioconductor.org/packages/release/bioc/vignettes/DEP/inst/doc/MissingValues.html#test-for-differential-expression) I test which imputation method is the best.
+
+The methods I tested are:
+
+-   No imputation, but filtering and normalisation
+-   *MinProb* imputation
+-   *man* shifted Gaussian imputation
+-   *knn* imputation
+-   *MLE* imputation
+-   *zero* imputation
+-   Mixture of *min* for MNAR in Suz12 KO and *knn* for MAR
+
+For this comparison only I use a significant threshold of `0.05` and \|1.5\| log2 Fold change.
+
+```{r, warning=FALSE, message = F, warning = F}
+# DE analysis on no, MinProb, man, knn, and MLE imputations
+no_imputation_res <- DE_analysis_KOrL_KOrS(data_norm)
+minprob_imputation_res <- DE_analysis_KOrL_KOrS(data_imp_min)
+man_imputation_res <- DE_analysis_KOrL_KOrS(data_imp_man)
+knn_imputation_res <- DE_analysis_KOrL_KOrS(data_imp_knn)
+mle_imputation_res <- DE_analysis_KOrL_KOrS(data_imp_mle)
+zer_imputation_res <- DE_analysis_KOrL_KOrS(data_imp_zer)
+mix_imputation_res <- DE_analysis_KOrL_KOrS(data_imp_mixed)
+```
+
+Check how many differential enriched proteins there are in each dataset
+
+```{r}
+# Number of significant proteins
+objects <- c("no_imputation_res", "minprob_imputation_res", 
+             "man_imputation_res", "knn_imputation_res", 
+             "mle_imputation_res", "zer_imputation_res", 
+             "mix_imputation_res")
+
+kable(purrr::map_df(objects, DE_prots))
+```
+
+To further compare the results of the different imputation methods one could use ROC curves.
+
+```{r, ROC curves dataset 2}
+# Function to obtain ROC data
+get_ROC_df <- function(results) {
+  get(results) |>
+  select(name, KOrL_vs_KOrS_p.val, significant) |>
+  mutate(
+    DE = grepl(T, significant),
+    BG = grepl(F, significant)) |>
+  arrange(KOrL_vs_KOrS_p.val) -> tmp
+  
+  mutate(tmp,
+      TPR = cumsum(as.numeric(DE)) / length(which(tmp$DE)),
+      FPR = cumsum(as.numeric(BG)) / length(which(tmp$BG)),
+      method = results) -> tmp
+  return(tmp)
+
+}
+# Get ROC data 
+ROC_df <- purrr::map_df(objects, get_ROC_df)
+```
+
+Plot ROC
+
+```{r, plot ROC curves dataset 2}
+ggplot(ROC_df, aes(FPR, TPR, col = method)) +
+  geom_line() +
+  coord_cartesian(xlim = c(0, 0.1), ylim = c(0, 1)) +
+  labs(title = "ROC-curve") +
+  theme(axis.text = element_text(color = 'black'),
+        plot.background = element_blank(), 
+        strip.background = element_blank(),
+        panel.background = element_blank())
+
+```
+
+Basically all methods are good and **better than no imputation**. So I settled on using the mixed imputation method and get the final result table for the volcano plot.
+
+### Test against Suz12 KO as control
+
+Here the SUZ12 KO acts as a control.
+
+```{r, message = FALSE, warning = FALSE}
+data_imp_mixed |>
+  test_diff(type = "control", control = "KO") |>
+  add_rejections(alpha = 0.05) -> res_KO
+```
+
+Volcano plot: **KO+SUZ12-Short**
+
+```{r, KOrSvsKO volcano, warning = FALSE, fig.width = 5, fig.height = 7}
+plot_volcano(dep = res_KO, contrast = "KOrS_vs_KO") +
+  labs(title = 'KO+S vs KO')
+```
+
+Volcano plot: **KO+SUZ12-Long**
+
+```{r, KOrLvsKO volcano, warning = FALSE, fig.width = 5, fig.height = 7}
+plot_volcano(dep = res_KO, contrast = "KOrL_vs_KO") +
+  labs(title = 'KO+L vs KO')
+```
+
+Remove from the dataset the protein hits that are significant in the Suz12 KO pull downs.
+
+```{r, filter out signif proteins in SUZ12KO}
+get_results(res_KO) |>
+  subset(KOrL_vs_KO_ratio < -0.5) |>
+  subset(KOrL_vs_KO_p.adj <= 0.05) |> pull(ID) -> KO_hits_vs_Long
+
+get_results(res_KO) |>
+  subset(KOrS_vs_KO_ratio < -0.5) |>
+  subset(KOrS_vs_KO_p.adj <= 0.05) |> pull(ID) -> KO_hits_vs_Long
+
+KO_hits <- unique(c(KO_hits_vs_Long, KO_hits_vs_Long))
+
+message("Found : ", length(KO_hits), " proteins that are significantly enriched in the Suz12 KO. I'll discard them as they're unspecific")
+```
+
+### Test KO+SUZ12-S vs KO+SUZ12-L
+
+Here the KO+SUZ12-L acts as a control.
+
+```{r, short vs long, warning = FALSE, fig.width = 5, fig.height = 7}
+data_imp_mixed |>
+  test_diff(type = "control", control = "KOrL") |>
+  add_rejections(alpha = 0.05) |>
+  plot_volcano(contrast = "KOrS_vs_KOrL") +
+  labs(title = 'KO+S vs KO+L')
+```
+
+Consider significant everything with an FDR \<= 0.05 and a log2 fold change more than 1.25.
+
+```{r, set significance threshold in rescue IP-MS}
+data_imp_mixed |>
+  test_diff(type = "control", control = "KOrL") |>
+  add_rejections(alpha = 0.05, lfc = log2(1.25)) |>
+  get_results() -> data_results
+
+# remove KO hits
+data_results <- subset(data_results, ! ID %in% KO_hits)
+```
+
+### KO+S vs KO+L Volcano plot
+
+Rename the 2 isoforms of Aebp2 to match what is used in the literature
+
+```{r, little renaming of Aebp2}
+data_results |>
+  mutate(name = ifelse(test = name == "Aebp2.1", yes = "Embryo Aebp2", no = name)) |>
+  mutate(name = ifelse(test = name == "Aebp2", yes = "Somatic Aebp2", no = name)) |>
+  # actually simplify and label the embryonic Aebp2 just as "Aepb2"
+  mutate(name = ifelse(test = name == "Embryo Aebp2", yes = "Aebp2", no = name)) |>
+  mutate(name = ifelse(test = name == "Jard2", yes = "Jarid2", no = name) ) -> data_results
+```
+
+Select proteins to label and set fill colour for Aebp2 and Jarid2
+
+```{r}
+prot_to_label <- c("Aebp2", "Jarid2", "Stag2", "Dhb12", "Phf11", "Rpb4", "Rprd2",
+                   "Chm2a", "Nsun5", "Zn296", "Ari5b", "Ezhip")
+
+data_results <- mutate(data_results, 
+                       Label = ifelse(name %in% prot_to_label, yes = TRUE, no = FALSE),
+                       pretty_name = case_when(Label == TRUE ~ str_wrap(name, width = 10),
+                                         Label == FALSE ~ name) ) |>
+  mutate(Label_fill = case_when(name == "Aebp2" ~ "forestgreen",
+                                name == "Jarid2" ~ "hotpink", 
+                                !name %in% c("Aebp2", "Jard2") ~ "white"))
+  
+```
+
+Make the volcano plot
+
+```{r, Fig S2L, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+ggplot(data = data_results) +
+  aes(x = KOrS_vs_KOrL_ratio, y = -log10(KOrS_vs_KOrL_p.val), 
+      fill = KOrS_vs_KOrL_significant ) +
+  geom_point(shape = 21, show.legend = F, stroke = 0.16)  +
+  labs(x = expression(log[2] ~ "Fold Change"), y = expression(-log[10] ~ "P-Value")) +
+  coord_cartesian(xlim = c(-7.5, 7.5), ylim = c(0, 8.0), clip = 'on') +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.01), add = c(0.02, 0.04)),
+                     n.breaks = 7) +
+  scale_x_continuous(n.breaks = 10, expand = expansion(mult = 0, add = 0), oob = scales::oob_squish ) +
+  Volcano_plot_theme -> p_basic_Volcano
+
+p_Volcano2 <- p_basic_Volcano + 
+  annotate(geom = "label", x = 5.0,  y = 0.35, label = "KO+Suz12S", 
+           colour = "black", fill = "darkorange1", size = 2,
+           label.padding = grid::unit(0.5, "mm"), 
+           label.r = unit(0.5, "mm"), family = "Arial",
+           label.size = grid::unit(0.125, "mm") ) +
+  annotate(geom = "label", x = -5.0, y = 0.35, label = "KO+Suz12L", 
+           colour = "black",  fill = "mediumpurple3", size = 2, 
+           label.padding = grid::unit(0.5, "mm"), 
+           label.r = unit(0.25, "mm"), family = "Arial",
+           label.size = grid::unit(0.125, "mm") ) +
+  # points on the right side
+  geom_label_repel(data = subset(data_results, Label & KOrS_vs_KOrL_ratio > 0 ), 
+                   aes(label = pretty_name, fill = Label_fill), 
+                   seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                   family = "Arial", size = 2, nudge_x = -0.5,
+                   segment.color = 'black',verbose = F, 
+                   box.padding = grid::unit(1, "mm"),
+                   point.padding = grid::unit(0.55, "mm"),
+                   label.padding = grid::unit(0.5, "mm"), 
+                   label.size = 0.125, 
+                   max.overlaps = 20)  +
+  # points on the left side
+  geom_label_repel(data = subset(data_results, Label & KOrS_vs_KOrL_ratio < 0), 
+                 aes(label = pretty_name, fill = Label_fill), 
+                 seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                 family = "Arial", size = 2, nudge_x = 0.1,
+                 segment.color = 'black',verbose = F, 
+                 box.padding = grid::unit(1, "mm"),
+                 point.padding = grid::unit(0.55, "mm"),
+                 label.padding = grid::unit(0.5, "mm"), 
+                 label.size = 0.125, 
+                 max.overlaps = 20)  +
+  scale_fill_manual(values = c('gray84', 'forestgreen', 'hotpink',  'firebrick2', 'white'))
+
+p_Volcano2
+```
+
+Save to pdf
+
+```{r, save volcano plot 2}
+ggsave(filename = "FigS2L_KOrS_vs_KOrL_Volcano.pdf", plot = p_Volcano2,
+       device = cairo_pdf, path = pdf_dir_fig2, width = 4.5, height = 5.2, units = "cm")
+```
+
+Make it interactive
+
+```{r prepare for interactive volcano plot 2, warning=FALSE, message=FALSE}
+p_interactive_Volcano <- ggplot(data = data_results) +
+  aes(x = KOrS_vs_KOrL_ratio, y = -log10(KOrS_vs_KOrL_p.val), 
+      fill = KOrS_vs_KOrL_significant, group = 1 ) +
+  geom_point(shape = 21, show.legend = F, aes(text = paste0(name)) ) +
+  labs(x = expression(log[2] ~ "Fold Change"), y = expression(-log[10] ~ "P-Value")) +
+  coord_cartesian(xlim = c(-7, 7.0), clip = 'on') +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.01), add = c(0.02, 0.04)),
+                     n.breaks = 7) +
+  scale_x_continuous(n.breaks = 10, expand = expansion(mult = 0, add = 0) ) +
+  scale_fill_manual(values = c("TRUE" = 'firebrick2', "FALSE" = 'gray84') ) +
+  labs(x = "log2 Fold Change", y = "-log10 P-Value") +
+  Volcano_plot_theme 
+```
+
+```{r display interactive volcano plot 2, fig.width=6, fig.height=7}
+ggplotly(p_interactive_Volcano, tooltip = "text")
+```
+
+Add Mean PSMs
+
+```{r Calcualte mean PSM in rescue dataset}
+assay(data_imp_mixed) |>
+  as.data.frame() |>
+  rownames_to_column("name") |>
+  pivot_longer(cols = !c("name"), names_to = "Sample", values_to = "Norm_PSMs") |>
+  mutate(Condition = case_when( grepl(x = Sample, pattern = "KOrL") ~ "KO+L",
+                                grepl(x = Sample, pattern = "KOrS") ~ "KO+S",
+                                grepl(x = Sample, pattern = "KO_") ~ "KO") ) |>
+  relocate(Condition, .after = Sample) |>
+  mutate(Condition = factor(Condition, levels = c("KO+L", "KO+S", "KO") ) ) |>
+  group_by(name) |>
+  mutate(Mean_PSM = mean(Norm_PSMs, na.rm = T)) |>
+  select(name, Mean_PSM) |>
+  unique() |>
+  mutate(name = ifelse(test = name == "Aebp2.1", yes = "Embryo Aebp2", no = name)) |>
+  mutate(name = ifelse(test = name == "Aebp2", yes = "Somatic Aebp2", no = name)) |>
+  # actually simplify and label the embryonic Aebp2 just as "Aepb2"
+  mutate(name = ifelse(test = name == "Embryo Aebp2", yes = "Aebp2", no = name)) |>
+  mutate(name = ifelse(test = name == "Jard2", yes = "Jarid2", no = name) ) |>
+  right_join(data_results, by = "name") |>
+  relocate(ID, .after = name) -> res_KO_rescues
+```
+
+Define proteins to label in the MA plot
+
+```{r}
+prot_to_label_MA <- c(PRC2, PRC2.1, PRC2.2, "Stag2", "Phf11", "Rprd2", "Addg",
+                      "Chm2a", "Nsun5", "Zn296", "Anxa6", "Ezhip", "Eloc", "H4",
+                      "Epop", "Elob", "Dyhc1", "Myo1e",  "Brd2", "Gptch4", 
+                      "Smrd2", "Actb", "Myh14", "Cor2b") |> unique()
+```
+
+Plot Mean PSMs vs log2 Fold Change.
+
+```{r, MA plot Rescues, fig.width = 7, fig.height = 3}
+res_KO_rescues |>
+mutate(Label = ifelse(name %in% prot_to_label_MA, yes = TRUE, no = FALSE),
+       pretty_name = case_when(Label == TRUE ~ str_wrap(name, width = 10), Label == FALSE ~ name) ) |>
+  mutate(Label_fill = case_when(name == "Aebp2" ~ "forestgreen",
+                                name == "Jarid2" ~ "hotpink", 
+                                !name %in% c("Aebp2", "Jarid2") ~ "white")) -> res_KO_rescues
+
+ggplot(res_KO_rescues) +
+  aes(x = Mean_PSM, y = KOrS_vs_KOrL_ratio, fill = KOrS_vs_KOrL_significant ) +
+  geom_point(shape = 21, show.legend = F, stroke = 0.16)  +
+  geom_hline(yintercept = 0, colour = "black") +
+  labs(x = expression(log[2] ~ "Mean PSM"), y = expression(-log[2] ~ "Fold Change")) +
+  scale_y_continuous(n.breaks = 7) +
+  scale_x_continuous(n.breaks = 7) -> p_basic_MA_plot
+
+p_basic_MA_plot +
+  # points on top
+  geom_label_repel(data = subset(res_KO_rescues, Label & KOrS_vs_KOrL_ratio > 0 ), 
+                   aes(label = pretty_name, fill = Label_fill), 
+                   seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                   family = "Arial", size = 2, nudge_x = -0.25,
+                   segment.color = 'black',verbose = F, 
+                   box.padding = grid::unit(1, "mm"),
+                   point.padding = grid::unit(0.55, "mm"),
+                   label.padding = grid::unit(0.5, "mm"), 
+                   label.size = 0.125, 
+                   max.overlaps = 20)  +
+  # points on the bottom
+  geom_label_repel(data = subset(res_KO_rescues, Label & KOrS_vs_KOrL_ratio < 0), 
+                 aes(label = pretty_name, fill = Label_fill), 
+                 seed = 16, show.legend = F, segment.curvature = -1e-20, 
+                 family = "Arial", size = 2, nudge_x = 0.25,
+                 segment.color = 'black',verbose = F, 
+                 box.padding = grid::unit(1, "mm"),
+                 point.padding = grid::unit(0.55, "mm"),
+                 label.padding = grid::unit(0.5, "mm"), 
+                 label.size = 0.125, 
+                 max.overlaps = 20) +
+
+  scale_fill_manual(values = c('gray84', "forestgreen", "hotpink", 'firebrick2', "white")) +
+  Volcano_plot_theme -> p_MA_plot_Rescues
+p_MA_plot_Rescues
+```
+
+Save to pdf.
+
+```{r save MA plot 2}
+ggsave(filename = "MAplot_KOrS_vs_KOrL.pdf", plot = p_MA_plot_Rescues,
+       device = cairo_pdf, path = pdf_dir_fig2, width = 4.5, height = 5.25, units = "cm")
+```
+
+```{r, make MA plot 2 interactive, warning = FALSE}
+p_interactive_MA <- p_basic_MA_plot +
+  geom_point(shape = 21, show.legend = F, aes(text = paste0(name)) ) +
+  scale_fill_manual(values = c("TRUE" = 'firebrick2', "FALSE" = 'gray84') ) +
+  labs(x = "log2 Mean PSMs", y = "log2 Fold Change") +
+  Volcano_plot_theme 
+```
+
+I also made an interactive MA plot if one is interested in exploring more the proteins.
+
+```{r, show interactive MA plot2 , fig.width = 7, fig.height = 3}
+ggplotly(p_interactive_MA)
+```
+
+### Export results to table
+
+Export for Supplementary table
+
+```{r merge results tables}
+res_WT_Dexon4 <- select(res_WT_Dexon4, -c("Dexon4_centered","WT_centered", "significant") )
+colnames(res_WT_Dexon4) <- gsub("Dexon4_vs_WT", "∆ex4vsWT", colnames(res_WT_Dexon4) ) 
+
+write_excel_csv(x = res_WT_Dexon4, file = file.path(tbl_dir_fig2, 'WT_vs_dEX4_res.csv'),
+                col_names = T, quote = "all")
+
+res_KO_rescues <- select(res_KO_rescues, c("name","ID", "Mean_PSM", starts_with('KOrS_vs_KOrL')) )
+colnames(res_KO_rescues) <- gsub("KOrS_vs_KOrL", "KO+S_vs_KO+L", colnames(res_KO_rescues) ) 
+
+write_excel_csv(x = res_KO_rescues, file = file.path(tbl_dir_fig2, 'KO-L_vs_KO-S_res.csv'),
+                col_names = T, quote = "all")
+```
+
+## Targeted proteomic identification of SUZ12-S peptide
+
+Show the MS/MS spectra of the SUZ12 Short peptides in WT and ∆ex4 mESCs.
+
+Tidy and reshape the `PRM` data imported before.
+
+```{r, get fragments for the skipping peptide}
+PRM |>
+  subset(Replicate %in% c(2, 4)) |>
+  subset(Peptide == skipping_peptide) |> 
+  subset(Precursor_Charge == 3)  |>
+  subset(grepl("^y|b", x = Fragment_Ion)) |>
+  subset(Fragment_Ion != "y14") |>
+  mutate(Peak_Rank = Peak_Rank - 1) |>
+  mutate(Ion_Type = ifelse(test = grepl(pattern = "^b", x = Fragment_Ion), yes = "N-term", no = "C-term") ) |>
+  mutate(Sample_Type = ifelse(grepl(Replicate, pattern =  2), yes = "WT", no = "∆ex4")) |>
+  mutate(Sample_Type = factor(Sample_Type, levels = c("WT", "∆ex4"))) -> tidy_PRM
+```
+
+Glimpse into the targeted proteomics data
+
+```{r, pretty table of suz12 short peptide}
+#| tbl-cap: "General parameters of SUZ12-S peptide in targeted proteomics experiment"
+#| tbl-colwidths: [60,40]
+kable( slice_head(tidy_PRM) )
+```
+
+Plot supplementary figure 1E.
+
+```{r, plot figure, fig.width = 1.8, fig.height = 1.1 }
+ggplot(tidy_PRM) +
+  aes(x = Product_Mz, y = Area /10^3, colour = Ion_Type, group = Ion_Type) +
+  facet_wrap(~Sample_Type, scales = "fixed") +
+  geom_col(show.legend = F, linewidth = 0.2) +
+  geom_text(data = subset(tidy_PRM,  Ion_Type == "N-term"),
+                  aes(label = Fragment_Ion), 
+                  family = "Arial", size = 1.25, nudge_y = 7, nudge_x = -20 )+
+  
+  geom_text(data = subset(tidy_PRM,  Ion_Type == "C-term"),
+                  aes(label = Fragment_Ion),
+                  family = "Arial", size = 1.25, nudge_y = 7, nudge_x = 20) + #
+  scale_x_continuous(n.breaks = 4) +
+  scale_y_continuous(expand = expansion(add = 0, mult = c(0, 0.1)) ) + 
+  scale_colour_manual(values = c("#C98686", "#966B9D"), name = "Ion Type") +
+  coord_cartesian(xlim = c(400, NA)) +
+  labs(x = "m/z", title = paste0("Peptide: ", unique(tidy_PRM$Peptide))) +
+  theme_classic(base_size = 6, base_family = "Arial") +
+  theme(panel.grid.major = element_line(linewidth = 0.15, colour = "gray84"),
+        axis.text = element_text(colour = "black"),
+        axis.title = element_text(size = 5),
+        axis.line = element_line(linewidth = 0.1),
+        plot.title = element_text(size = 5, hjust = 0.5, 
+                                  margin = margin(b = -1, unit = "mm")),
+        axis.ticks = element_line(linewidth = 0.1),
+        legend.position = c(0.125, 0.9),
+        legend.box.background = element_blank(),
+        legend.key = element_blank(),
+        legend.key.size = unit(0, "mm"),
+        legend.title = element_blank(),
+        legend.text = element_text(margin = margin(l = -1, unit = "mm") ),
+        legend.text.align = 0,
+        strip.background = element_blank()) -> p_spectra
+p_spectra
+```
+
+Save to pdf.
+
+```{r, save spectra skipping peptide}
+ggsave(filename = "FigS2E_SUZ12_Short_Peptide_Spectra.pdf", plot = p_spectra,
+       device = cairo_pdf, path = pdf_dir_fig2, width = 4.5, height = 2.8, units = "cm")
+```
+
+## Peptide coverage
+
+### MzTab PSMs
+
+First use the PSMs from the MzTab file for SUZ12 and Jarid2
+
+```{r, parse SUZ12 adn JARID2 in one go}
+Suz12_UniProt_ID <- 'Q80U70'
+Jarid2_UniProt_ID <-'Q62315'
+list_of_UniProtIDs <- c(Suz12_UniProt_ID, Jarid2_UniProt_ID)
+lapply(list_of_UniProtIDs, function(x){
+  # message('Parsing UniProtID: ', x)
+  read_psm_MzTab(MzTab_path = WT_Dex4_mzTAB_path, 
+                 POI_UniProtID = x, parse_accession = T)
+}) -> list_df
+prot_pep_coverage <- do.call('rbind', list_df ) 
+```
+
+Plot the 2 proteins
+
+```{r, plot SUZ12 and JARID2, fig.width = 5, fig.height = 3}
+ggplot(prot_pep_coverage)  + 
+  facet_wrap( ~ Protein, nrow = 2, scales = "free")  +
+  aes(x = start, xend = end, y = UniProtID, yend = UniProtID, color = UniProtID) +
+  geom_segment(size = 1.5, show.legend = F) +
+  labs(x = "Amino acids position", y = "") +
+  scale_x_continuous(expand = expansion(add = 0.1), 
+                     n.breaks = 10, limits = c(0, NA)) +
+  pep_coverage_theme
+```
+
+### Saint peptide counts
+
+The MzTab file from `proteomicslfq` doesn't contain the peptide info *per sample*, so I use the Saint software [@Teo2014] output.
+
+I created a simple `R` function to read the peptides of any given `UniProtID` from the excel output tables using `read_saint_peps()`. This peptides are then mapped to the protein sequence where I extract start and end position and prepare them for plotting with the function `cov2res_peptides()`. This functions allow to specify the exon boundary amino acids (with `AA_exon_start` and `AA_exon_end`), in this way the function `summary_exon_coverage()` prints out the number of peptides that map to that exonic region. Lastly the peptides are plotted along the protein sequence using `plot_pep_cov()`.
+
+#### WT and ∆ex4 IP
+
+Import SUZ12 peptides
+
+```{r, WT IP read SUZ12 peptides from saint output}
+suz12_pep_cov <- read_saint_peps(saint_path = saint_path_WT_dEx4, 
+                                 UniProtID = Suz12_UniProt_ID, 
+                                 AA_exon_start = 129, AA_exon_end = 153,
+                                 eoi_name = 'exon4')
+
+# jarid2_pep_cov <- read_saint_peps(saint_path = saint_path_WT_dEx4, 
+#                                  UniProtID = Jarid2_UniProt_ID, 
+#                                  AA_exon_start = 1, AA_exon_end = 2,
+#                                  eoi_name = 'exon4')
+```
+
+Check peptide counts in SUZ12 exon 4
+
+```{r, glimpse SUZ12 peptide coverage }
+#| tbl-cap: "Exon 4 peptide coverage"
+#| tbl-colwidths: [60,40]
+kable(summary_exon_coverage(suz12_pep_cov))
+```
+
+Reshape coverage data and rename sample names and turn them into a factor so that they are in the right order for plotting them.
+
+```{r, factorise WT IP samples}
+suz12_res <- suz12_pep_cov |>
+  cov2res_peptides() |>
+  mutate(Sample_Name = case_when(Sample == "A" ~ "WTp",
+                                 Sample == "B" ~ "WT#1",
+                                 Sample == "C" ~ "WT#2",
+                                 Sample == "D" ~ "∆EX4#1",
+                                 Sample == "E" ~ "∆EX4#2",
+                                 Sample == "F" ~ "∆EX4#3"),
+         .before = Sample) |>
+  mutate(Sample_Name = factor(Sample_Name, 
+                              levels = c("WTp", "WT#1", "WT#2", 
+                                         "∆EX4#1", "∆EX4#2", "∆EX4#3")))
+```
+
+Plot SUZ12 coverage. Each peptide is coloured by their area under the peak intensity.
+
+```{r, WT IP coverage, fig.width = 6, fig.height = 1.8}
+p_suz12_cov <- plot_pep_cov(df_res = suz12_res, AA_exon_start = 129, AA_exon_end = 152)
+p_suz12_cov
+```
+
+Save supplementary figure 2F to pdf.
+
+```{r, save figure S2F WT IP}
+ggsave(filename = "FigS2F_WT_dex4_IP_Peptides_Coverage.pdf", plot = p_suz12_cov,
+       device = cairo_pdf, path = pdf_dir_fig2, width = 16.5, height = 3.5, units = "cm")
+```
+
+To address reviewer #3 comment #2 I check the peptides coverage for in 2 other PRC2 PanAS exons in EZH2 (UniProtID: `Q61188`).
+
+-   [EZH2 exon 4](https://vastdb.crg.eu/event/HsaEX0023625@hg38).
+
+```{r, Get_WT_Dex_EZH2_exon_4_peptide_coverage}
+read_saint_peps(saint_path = saint_path_WT_dEx4, 
+                UniProtID = 'Q61188', 
+                AA_exon_start = 83, AA_exon_end = 121,
+                eoi_name = 'exon 4') |>
+  cov2res_peptides() |>
+  mutate(Sample_Name = case_when(Sample == "A" ~ "WTp", Sample == "B" ~ "WT#1",
+                                 Sample == "C" ~ "WT#2", Sample == "D" ~ "∆EX4#1",
+                                 Sample == "E" ~ "∆EX4#2", Sample == "F" ~ "∆EX4#3"), .before = Sample) |>
+  mutate(Sample_Name = factor(Sample_Name, 
+                              levels = c("WTp", "WT#1", "WT#2", 
+                                         "∆EX4#1", "∆EX4#2", "∆EX4#3"))) -> df_ezh2_ex4_wt
+```
+
+Plot EZH2 exon 4 coverage
+
+```{r, Plot_WT_Dex_EZH2_exon_4_peptide_coverage, fig.width = 6, fig.height = 1.8}
+plot_pep_cov(df_res = df_ezh2_ex4_wt, AA_exon_start = 83, AA_exon_end = 121) +
+  labs(title = 'EZH2 exon 4') -> p_EZH2_ex4_cov
+p_EZH2_ex4_cov
+```
+Only part of the exon is covered but we can't claim major differences in peptides abunance.
+
+Save to pdf.
+
+```{r, save WT Dex4 EZH2 exon 4 coverage}
+ggsave(filename = "Rev3_EZH2ex4_WT_Dex4_IP_Peptides_Coverage.pdf", 
+       plot = p_EZH2_ex4_cov, device = cairo_pdf, path = pdf_dir_fig2, 
+       width = 16.5, height = 3.5, units = "cm")
+```
+
+-   [EZH2 exon 14](https://vastdb.crg.eu/event/HsaEX0023622@hg38)
+
+```{r, WT_Dex_EZH2_exon_14_peptide_coverage}
+read_saint_peps(saint_path = saint_path_WT_dEx4, 
+                UniProtID = 'Q61188', 
+                AA_exon_start = 516, AA_exon_end = 558,
+                eoi_name = 'exon 14') |>
+  cov2res_peptides() |>
+  mutate(Sample_Name = case_when(Sample == "A" ~ "WTp", Sample == "B" ~ "WT#1",
+                                 Sample == "C" ~ "WT#2", Sample == "D" ~ "∆EX4#1",
+                                 Sample == "E" ~ "∆EX4#2", Sample == "F" ~ "∆EX4#3"), .before = Sample) |>
+  mutate(Sample_Name = factor(Sample_Name, levels = c("WTp", "WT#1", "WT#2", "∆EX4#1", "∆EX4#2", "∆EX4#3"))
+         ) -> df_ezh2_ex14_wt
+```
+
+Plot EZH2 exon 14 from the same dataset.
+```{r, Plot_WT_Dex_EZH2_exon_14_peptide_coverage, fig.width = 6, fig.height = 1.8}
+plot_pep_cov(df_res = df_ezh2_ex14_wt, AA_exon_start = 516, AA_exon_end = 558) +
+  labs(title = 'EZH2 exon 14') -> p_EZH2_ex14_cov
+p_EZH2_ex14_cov
+```
+
+Save to pdf
+
+```{r, Save WT Dex IP EZH2 exon 14 peptide coverage}
+ggsave(filename = "Rev3_EZH2ex14_WT_Dex4_IP_Peptides_Coverage.pdf", 
+       plot = p_EZH2_ex14_cov, device = cairo_pdf, path = pdf_dir_fig2, 
+       width = 16.5, height = 3.5, units = "cm")
+```
+
+Do the same kind of plots for the FLAG IP of the KO rescues.
+
+```{r, echo = F, eval = TRUE}
+rm(df_ezh2_ex4_wt, p_EZH2_ex4_cov, df_ezh2_ex14_wt, p_EZH2_ex14_cov)
+```
+
+#### KO rescues flag-IP
+
+Import the data using the same *ad hoc* function.
+
+```{r, import saint rescues}
+suz12_pep_cov <- read_saint_peps(saint_path = saint_path_KO_Rescues, 
+                                 UniProtID = Suz12_UniProt_ID, 
+                                 AA_exon_start = 129, AA_exon_end = 153,
+                                 eoi_name = 'exon4')
+```
+
+Reshape coverage data and rename sample names.
+
+```{r, factorise FLAG KO rescues IP samples}
+suz12_res <- suz12_pep_cov |>
+  cov2res_peptides() |>
+  mutate(Sample_Name = case_when(Sample == "A" ~ "KO#1",
+                                 Sample == "B" ~ "KO#2",
+                                 Sample == "C" ~ "KO#3",
+                                 Sample == "D" ~ "KO+L#1",
+                                 Sample == "E" ~ "KO+L#2",
+                                 Sample == "F" ~ "KO+L#3",
+                                 Sample == "G" ~ "KO+S#1",
+                                 Sample == "H" ~ "KO+S#2",
+                                 Sample == "I" ~ "KO+S#3",
+                                 ),
+         .before = Sample) |>
+  mutate(Sample_Name = factor(Sample_Name, 
+                              levels = c("KO+L#1", "KO+L#2", "KO+L#3",
+                                         "KO+S#1", "KO+S#2", "KO+S#3",
+                                         "KO#1", "KO#2", "KO#3")))
+```
+
+Plot SUZ12 coverage in rescues IP
+
+```{r, Plot FLAG KO rescues IP coverage, fig.width = 6, fig.height = 1.8}
+p_suz12_cov_rescues <- plot_pep_cov(df_res = suz12_res, 
+                                    AA_exon_start = 129, AA_exon_end = 152)
+p_suz12_cov_rescues
+```
+
+::: callout-note
+Please note that there's no peptide mapping to SUZ12 for sample KO#1 and KO#2 and in the case of KO#3 the peptides are only in exon 1 which is before the SUZ12 exon 2-3 deletion.
+:::
+
+Save KO rescues peptides coverage to pdf.
+
+```{r, save figure FLAG KO rescues IP}
+ggsave(filename = "FigS2F_KO_Rescues_IP_Peptides_Coverage.pdf", plot = p_suz12_cov_rescues,
+       device = cairo_pdf, path = pdf_dir_fig2, width = 16.5, height = 3.5, units = "cm")
+```
+
+Check EZH2 peptides coverage also in this dataset like before.
+
+-   [EZH2 exon 4](https://vastdb.crg.eu/event/HsaEX0023625@hg38).
+
+```{r, Get Flag rescues EZH2 exon 4 peptide coverage}
+read_saint_peps(saint_path = saint_path_KO_Rescues, 
+                UniProtID = 'Q61188', 
+                AA_exon_start = 83, AA_exon_end = 121,
+                eoi_name = 'exon4') |>
+  cov2res_peptides() |>
+  mutate(Sample_Name = case_when(Sample == "A" ~ "KO#1",
+                                 Sample == "B" ~ "KO#2",
+                                 Sample == "C" ~ "KO#3",
+                                 Sample == "D" ~ "KO+L#1",
+                                 Sample == "E" ~ "KO+L#2",
+                                 Sample == "F" ~ "KO+L#3",
+                                 Sample == "G" ~ "KO+S#1",
+                                 Sample == "H" ~ "KO+S#2",
+                                 Sample == "I" ~ "KO+S#3",
+                                 ),
+         .before = Sample) |>
+  mutate(Sample_Name = factor(Sample_Name, 
+                              levels = c("KO+L#1", "KO+L#2", "KO+L#3",
+                                         "KO+S#1", "KO+S#2", "KO+S#3",
+                                         "KO#1", "KO#2", "KO#3"))
+         ) -> df_ezh2_ex4_flag
+```
+
+Plot coverage
+
+```{r, Plot Flag rescues  EZH2 exon 4 peptide coverage, fig.width = 6.5, fig.height = 1.8}
+plot_pep_cov(df_res = df_ezh2_ex4_flag, AA_exon_start = 83, AA_exon_end = 121) +
+  labs(title = 'EZH2 exon 4') -> p_EZH2_ex4_cov
+p_EZH2_ex4_cov
+```
+
+Not peptides could be mapped to exon 4 of EZH2 as it can also be checked with:
+```{r, check peptides mapping in EZH2 exon 4 flag}
+summary_exon_coverage(df_ezh2_ex4_flag)
+```
+
+Save to pdf.
+
+```{r, Save Flag rescues  EZH2 exon 4 peptide coverage}
+ggsave(filename = "Rev3_EZH2ex4_KO_Rescues_IP_Peptides_Coverage.pdf", 
+       plot = p_EZH2_ex4_cov, device = cairo_pdf, path = pdf_dir_fig2, 
+       width = 16.5, height = 3.5, units = "cm")
+```
+
+-   [EZH2 exon 14](https://vastdb.crg.eu/event/HsaEX0023622@hg38)
+
+```{r, Flag rescues EZH2 exon 14 peptide coverage, message = F, fig.width = 6.5, fig.height = 1.8}
+read_saint_peps(saint_path = saint_path_KO_Rescues, 
+                UniProtID = 'Q61188', 
+                AA_exon_start = 516, AA_exon_end = 558,
+                eoi_name = 'exon4') |>
+  cov2res_peptides() |>
+  mutate(Sample_Name = case_when(Sample == "A" ~ "KO#1",
+                                 Sample == "B" ~ "KO#2",
+                                 Sample == "C" ~ "KO#3",
+                                 Sample == "D" ~ "KO+L#1",
+                                 Sample == "E" ~ "KO+L#2",
+                                 Sample == "F" ~ "KO+L#3",
+                                 Sample == "G" ~ "KO+S#1",
+                                 Sample == "H" ~ "KO+S#2",
+                                 Sample == "I" ~ "KO+S#3",
+                                 ),
+         .before = Sample) |>
+  mutate(Sample_Name = factor(Sample_Name, 
+                              levels = c("KO+L#1", "KO+L#2", "KO+L#3",
+                                         "KO+S#1", "KO+S#2", "KO+S#3",
+                                         "KO#1", "KO#2", "KO#3"))
+         ) -> df_ezh2_ex14_flag
+```
+
+Plot.
+
+```{r, Flag rescues EZH2 exon 14 peptide coverage, message = F, fig.width = 6.5, fig.height = 1.8}
+plot_pep_cov(df_res = df_ezh2_ex14_flag, AA_exon_start = 516, AA_exon_end = 558) +
+  labs(title = 'EZH2 exon 14') -> p_EZH2_ex14_cov
+p_EZH2_ex14_cov
+```
+
+Save to pdf
+
+```{r, Save Flag rescues EZH2 exon 14 peptide coverage}
+ggsave(filename = "Rev3_EZH2ex14_KO_Rescues_IP_Peptides_Coverage.pdf", 
+       plot = p_EZH2_ex14_cov, device = cairo_pdf, path = pdf_dir_fig2, 
+       width = 16.5, height = 3.5, units = "cm")
+```
+
+    
+::: {.callout-warning title="Comments on the identification of AS isoforms peptides with Mass spectrometry"}
+
+Due to MS limitations it is very difficult if not impossible to detect different AS from a label free IP-MS experiment. In the case of SUZ12-S peptide we performed a targeted MS protocol. A Precise Reaction Monitoring (PRM) method was used to acquire the data where we selected only 3 specific SUZ12 peptides for further fragmentation.
+:::
+
+I could check other AS exons in PRC2 but for now I want to stop here.
+
+## qPCR
+
+Analyse and plot *Suz12* gene expression by qPCR in ESCs.
+
+```{r, import qPCR Ct values}
+qPCR <- read_delim(file = file.path(tbl_dir_fig2, "ESC_qPCR_expression_Ct_values.txt"),
+                   delim = '\t', col_names = T, show_col_types = FALSE)
+```
+
+```{r structure the data}
+qPCR$sample_name <- factor(qPCR$sample_name, levels = c("WT#1", "WT#2", "∆ex4#1", "∆ex4#2", "∆ex4#3"))
+qPCR$target_name <- factor(qPCR$target_name, levels = c("Suz12", "Ezh2", "Nanog", "Tbp"))
+qPCR$genotype <- factor(qPCR$genotype, levels = c('WT-like', '∆ex4') )
+qPCR$C_T <- as.numeric(qPCR$C_T)
+```
+
+Get summary statistics
+
+```{r, summary statistics qPCR}
+df_reps_sum <- qPCR |>
+  group_by(sample_name, target_name) |>
+  summarize(Ct_mean = mean(C_T, na.rm = TRUE), 
+            Ct_StDev = sd(C_T, na.rm = TRUE) ) |>
+  ungroup()
+```
+
+Add replicates information.
+
+```{r}
+qPCR <- left_join(qPCR, df_reps_sum, by = c("sample_name", "target_name"))
+```
+
+Use `Tbp` as house keeping gene.
+
+```{r}
+house_kpng_gene <- subset(qPCR, target_name == "Tbp") %>%
+  group_by(sample_name, target_name, plate) %>%
+  dplyr::summarize(CT_mean_norm = mean(C_T, na.rm = TRUE),
+                   Ct_StDev_norm = sd(C_T, na.rm = TRUE)) %>%
+  ungroup()
+house_kpng_gene$target_name <- NULL
+```
+
+Calculate ∆Ct relative to Tbp house keeping gene.
+
+```{r, delta Ct house keeping}
+qPCR <- left_join(qPCR, house_kpng_gene, by = c("sample_name", "plate")) %>%
+  mutate(Delta_Ct = C_T - CT_mean_norm,
+         Delta_Ct_st_dev = sqrt( (Ct_StDev^2) + (Ct_StDev_norm^2) ) )
+```
+
+Calculate ∆∆Ct relative to WT#1 as a reference sample.
+
+```{r, delta Ct reference sample}
+ref_Delta_Ct_WT <- subset(qPCR, sample_name == "WT#1") |>
+  select(target_name, replicate, plate, Delta_Ct) |>
+  group_by(target_name, plate) |>
+  summarize(ref_Delta_Ct = mean(Delta_Ct, na.rm = TRUE) )
+```
+
+Add info back to qPCR dataframe.
+
+```{r, delta delta Ct rel to WT1 and Tbp}
+qPCR <- left_join(qPCR, ref_Delta_Ct_WT, by = c("target_name", "plate") ) |>
+  mutate(Delta_Delta_Ct = Delta_Ct - ref_Delta_Ct)
+```
+
+Calculate fold change as $2^{-∆∆Ct}$.
+
+```{r fold change delta delta Ct}
+qPCR <- group_by(qPCR, sample_name, target_name, plate) %>%
+  summarize(Delta_Delta_Ct_mean = mean(Delta_Delta_Ct, na.rm = T),
+            Delta_Delta_Ct_std = sqrt(var(Delta_Delta_Ct, na.rm = T))) |>
+  ungroup() |>
+  left_join(x = qPCR, by = c("sample_name", "target_name", "plate") ) |>
+  mutate(Comp_Meth = 2^-(Delta_Delta_Ct_mean),
+         Comp_Meth_SD.plu = 2^ - ( Delta_Delta_Ct_mean - Delta_Ct_st_dev),
+         Comp_Meth_SD.min = 2^ - ( Delta_Delta_Ct_mean + Delta_Ct_st_dev) )
+```
+
+Plot qPCR fold change for pluripotency genes.
+
+```{r plot qPCR,  fig.width = 6, fig.height = 1.1 }
+subset(qPCR, target_name != "Tbp") |>
+ggplot() +
+  aes(x = sample_name,
+      y = 2^-Delta_Delta_Ct_mean,
+      ymin = Comp_Meth_SD.min,
+      ymax = Comp_Meth_SD.plu,
+      fill = genotype)  +
+  geom_col(position = position_dodge(), width = 0.5, linewidth = 0.2, 
+           colour = "black", show.legend = F)   +
+  geom_errorbar(stat = "identity", width = 0.25, col = "grey16", linewidth = 0.2,
+                position = position_dodge(width = 0.55)) +
+  geom_point(inherit.aes = F, show.legend = F,
+             aes(x = sample_name, y = 2^-Delta_Delta_Ct,
+                 fill = target_name, group = replicate),
+             shape = 21, col = "grey16", size = 1, alpha = 1, stroke = 0.2,
+             position = position_dodge(width = 0.35) ) +
+  facet_grid(~ target_name, scales = "fixed") +
+  scale_fill_manual(name = "Cell line name",
+                    values = c('WT-like' = "#377AA3", "∆ex4" = '#F7CB48') ) +
+  scale_y_continuous(expand = expansion(add = c(0.01, 0.25), mult = 0),
+                     labels = scales::number_format(accuracy = 0.1),
+                     n.breaks = 5) +
+  labs(x = "Sample",
+       y = "2^-∆∆Ct\n(normalized to Tbp and WT)") +
+  theme_classic(base_size = 6, base_family = "Arial") +
+  theme(legend.position = "none",
+        axis.text.y = element_text(colour = "black"),
+        axis.text.x = element_text(colour = "black", hjust = 0.75, angle = 45),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 5),
+        axis.ticks.length = unit(1, units = 'mm'),
+        axis.ticks.y = element_line(linewidth = 0.2),
+        axis.ticks.x = element_blank(),
+        axis.line = element_line(linewidth = 0.2),
+        strip.background = element_blank(),
+        plot.background = element_blank(),
+        panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = 'gray84', linewidth = 0.1) ) -> p_qPCR
+p_qPCR
+```
+
+Save to pdf.
+
+```{r, export qPCR plot}
+ggsave(filename = "FigS2D_qPCR_barplot.pdf", plot = p_qPCR, device = cairo_pdf, 
+       path = pdf_dir_fig2, units = 'cm', width = 6.75, height = 3.5)
+```
+
+End of figure 2 and supplementary figure 2 analysis code.
+
+# Session Info {#sec-sessioninfo}
+
+```{r, print session info}
+sessioninfo::session_info()
+```

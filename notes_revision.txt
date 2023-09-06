@@ -1,0 +1,14 @@
+
+Anticipating revisions:
+1) no H3K27me3 spike-in ChIP-seq replicates
+2) no SUZ12 spike-in ChIP-seq
+3) other evidence for dimerisation: FRET? CoIP HA/FLAG?
+4) H3K27me1/2? WE GOT IT
+5) SUZ12 ChIP-qPCR?
+6) AP-staining with Rescue clones (check SUZ12 exp before)
+7) ChIP-seq comparison of SUZ12 and K27me3 (e.g. Tornado plots) of L, S, VEFS-only, EEDR302S. Show local vs global patterns.
+8) If qPCR of RNA-samples of LIF depletion fig4 f check the markers listed in table S4 of paper PMID: 26000487
+9) Subcellular fractionation of WT and ∆ex4 cells indicating that both isoforms SUZ12-L and –S are present in the chromatin of the cells (Fig S2g).
+10) Tornado plot of Suz12 chip-seq peaks in cell lines.
+11) Make scatterplot quantification boxplot (Fig. 3g) of H3K27me1 to check where it increases in ∆ex4
+12) ChIP-seq tracks screenshots of SUZ12. 

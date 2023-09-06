@@ -1,0 +1,1172 @@
+---
+title: "Figure 1 and supplementary figure 1"
+author: "Niccolò Arecco"
+toc: true
+number-sections: true
+highlight-style: pygments
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-copy: true
+    theme:
+      light: flatly
+      dark: darkly
+editor: source
+bibliography: ../Paper_Analysis_References.bib
+---
+
+Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
+
+# Intro
+
+To fetch some of the inclusion tables (PSI data) stored on the CRG cluster I mount the server on my local computer with the following command in the terminal.
+
+```{bash, crgmnt, eval = F, echo = T}
+sshfs narecco@ant-login.linux.crg.es:/users/mirimia ~/mnt
+```
+
+which prompts my password and then allows me to navigate the cluster directories.
+
+For each sample AS events were quantified using the percentage of sequence inclusion (PSI) metric, which is a number ranging from zero to 100, corresponding to full sequence skipping or full sequence inclusion in all transcripts of a gene, respectively. For example, constitutively spliced exons have a PSI of 100. The PSI cannot be calculated for the very first and last exons of a gene.
+
+These documents reports the downstream AS analysis after processing the samples with VAST-TOOLS[@Tapial2017].
+
+## Quarto
+
+This document is generated using Quarto which enables to weave together content and executable code into a finished document. This is an improved version of what used to be called 'Rmarkdown'. The document hides all code chunks, but they can be opened up with the drop down arrow. On the top right corner there's a toggle for dark-mode. To learn more about Quarto see [here](https://quarto.org).
+
+# Set Up
+
+## Packages
+
+Load common `R` packages that have to be pre-installed. Check @sec-sessioninfo for package versions.
+
+```{r, load libraries, warning = FALSE, message = FALSE}
+library(readr)
+library(readxl)
+library(dplyr, warn.conflicts = F, quietly = T)
+library(tidyr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+library(ggsignif)
+library(ggrepel)
+library(ggbeeswarm)
+library(ggforce)
+library(scales)
+library(viridis, warn.conflicts = F, quietly = T)
+library(Cairo)
+library(knitr)
+```
+
+Load my R package `niar` to use my custom made function to parse vast-tools output.
+```{r import my R package based available version, warning = FALSE}
+if ( ('niar' %in% .packages(all.available = TRUE)) == TRUE ) {
+  library('niar')
+} else if ( ('niar' %in% .packages(all.available = TRUE)) == FALSE ){
+  message("The package niar is not installed so I'm trying to load it from ",
+          "the local repository of the package")
+  if ( dir.exists('~/mnt/narecco/software/R/niar' ) )  {
+    devtools::load_all(path = '~/mnt/narecco/software/R/niar')
+  } else {
+    stop("Can't find the local repo of the niar package! ",
+         "You must install it with:\n",
+         "devtools::install_github('Ni-Ar/niar') ")
+  }
+} else{
+  stop("Can't understand if 'niar' package was installed beforehand")
+}
+```
+
+## Functions
+
+Ggplot2 theme
+
+```{r, plot themes}
+theme_classic(base_family = "Arial", base_size = 5) +
+  theme(legend.position = "none",
+        axis.text = element_text(colour = "black", size = 5),
+        axis.line = element_line(linewidth = 0.18),
+        axis.text.x = element_text(angle = 45, hjust = 1,
+                                   margin = margin(r = -2, unit = "mm")),
+        axis.title = element_text(colour = "black", size = 5),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(vjust = 1, margin = margin(r = -1, unit = 'mm')),
+        axis.ticks = element_line(colour = "black", linewidth = 0.2),
+        axis.ticks.length.x = unit(1, units = "mm"),
+        axis.ticks.length.y = unit(1, units = "mm"),
+        strip.text.x = element_text(vjust = -1, size = 6),
+        strip.background = element_blank(),
+        panel.grid.major.y = element_line(colour = 'grey73', linewidth = 0.2),
+        panel.background = element_blank(),
+        plot.background = element_blank()) -> PSI_plot_theme
+```
+
+## Directories & File Paths
+
+```{r, set up general directories paths AS data}
+Suz12_AS_proj_dir <- file.path("~/OneDrive - CRG - Centre de Regulacio Genomica/Suz12_AS_project")
+code_dir_fig1 <- file.path(Suz12_AS_proj_dir, "_Code/Fig1")
+tbl_dir_fig1 <- file.path(code_dir_fig1, "tables")
+pdf_dir_fig1 <- file.path(code_dir_fig1, "pdfs")
+fasta_dir_fig1 <- file.path(code_dir_fig1, "fasta")
+```
+
+```{r, set up directories paths AS data}
+human_vts_out_path <- file.path("~/mnt/projects/vast-tools/vast_out/Hs2/VASTDB_v1")
+incl_tbl_hg38_path <- file.path(human_vts_out_path, "INCLUSION_LEVELS_FULL-hg38-145-v251.tab")
+
+# stop if file is not found
+stopifnot(file.exists(incl_tbl_hg38_path))
+```
+
+Import VastDB samples metadata for grouping and plotting all those samples.
+```{r, path to metadata of vastDB samples}
+hg38_mt_path <- file.path(tbl_dir_fig1, "Human_VastDB_Samples_Metadata.xlsx")
+stopifnot(file.exists(hg38_mt_path))
+
+prc2_events_path <- file.path(tbl_dir_fig1, "PRC2_Human_Events.xlsx")
+stopifnot(file.exists(prc2_events_path))
+```
+ 
+# Main Figure Panels
+
+## PanAS heatmap of PRC2 genes
+
+I arranged the PRC2 AS events in a small table. One column called `ORF` indicates the impact the AS events has on the open reading frame as found on VastDB. Briefly:
+
+-   "a" alternative protein isoform
+-   "x" ORF disrupting upon sequence exclusion
+-   "-" ORF disrupting upon sequence inclusion
+-   "u" AS event contained in the UTR
+
+```{r, define human exons to plot}
+human_vst_ids <- read_excel(path = prc2_events_path)
+genes_order <- unique(human_vst_ids$GENE)
+human_vst_ids$GENE <- factor(human_vst_ids$GENE, levels = genes_order)
+```
+
+Get the PSI values for each AS event in the excel table that was imported. This might take some time.
+```{r, grep PSIs human}
+grep_psi(inclusion_tbl = incl_tbl_hg38_path, vst_id = human_vst_ids$EVENT) |>
+    tidy_vst_psi() -> psi_tbl
+```
+
+Were all AS event fetched?
+```{r, check that all human events were fetched correcly}
+if ( all(unique(psi_tbl$EVENT) %in% human_vst_ids$EVENT) ) {
+  message("All AS events were correctly fetched")
+} else {
+  warning("These event(s) were not retrieved:\n",
+          cat( human_vst_ids$EVENT[which(unique(psi_tbl$EVENT) %in% human_vst_ids$EVENT)], 
+               collapse = '\n') )
+}
+```
+
+Import human metadata.
+```{r import human metadata}
+human_mt <- read_excel(path = hg38_mt_path, sheet = 'hg38_VastDB_Groups_Colours_n145')
+```
+
+Tidy up data: calculate how many samples were included in the dataset, filter for a minimum "VLOW" quality score and calculate the median PSI in each sample category.
+```{r, tidy up human PSIs}
+psi_tbl |> 
+  left_join(human_mt, by = "Sample") |>
+  left_join(human_vst_ids, by = c("GENE", "EVENT") ) |>
+  mutate(label = paste0(GENE, "-", Event_Num)) |>
+  mutate(label = str_remove(string = label, pattern = "_alt.*$")) |>
+  mutate(short_vst_id = gsub("Hsa[A-Z]+0+", "", EVENT, perl = T) ) |>
+  group_by(EVENT, Category) |>
+  mutate(Num_Samples = n()) |>
+  mutate(Category = gsub("_", " ", Category) ) |>
+  mutate(Category = factor(Category, levels = c("Embryonic",  "Neuronal",
+                                                "Epithelial", "Glandular",
+                                                "Other", "Cell lines"))) |>
+  mutate(Category_Short = gsub("nic", "\\.", Category),
+         Category_Short = gsub("nal", "\\.", Category_Short),
+         Category_Short = gsub("lial", "\\.", Category_Short),
+         Category_Short = gsub("ular", "\\.", Category_Short),
+         ) |> 
+  mutate(Category_Short  = factor(Category_Short, 
+                                  levels = c("Embryo.", "Neuro.",
+                                             "Epithe.", "Gland.",
+                                             "Other", "Cell lines"))) |>
+  mutate(Category_Num = paste0(Category, "\n(", Num_Samples, ")" ) ) -> psi_tbl
+```  
+  
+Define sample order  
+```{r, set factor to category num}
+psi_tbl |>
+  mutate(Category_Num = factor(Category_Num, 
+                               levels = c("Embryonic\n(24)", "Neuronal\n(22)",
+                                          "Epithelial\n(6)", "Glandular\n(13)",
+                                          "Other\n(69)",  "Cell lines\n(11)"))) |>
+  relocate(label, Category_Num, .after = EVENT) |>
+  subset(as.integer(Quality_Score_Value) >= 2) |>
+  mutate(median_PSI = median(PSI, na.rm = T)) |>
+  ungroup() -> tidy_human_psi_tbl
+
+event_labels <- unique(tidy_human_psi_tbl$label)
+# sort alphanumerically
+event_labels <- str_sort(event_labels, numeric = TRUE)
+# order events by gene_order
+event_labels[
+  unlist(
+    sapply(genes_order, simplify = T, function(x) {
+      grep(x = event_labels, pattern = x, fixed = F, perl = T)
+    } )
+    )
+  ] -> event_order
+# shorten the label
+event_order <- gsub("on", '', event_order)
+tidy_human_psi_tbl$label <- gsub("on", '', tidy_human_psi_tbl$label)
+
+# reverse order to have Suz12 on top of the heatmaps
+tidy_human_psi_tbl$label <- factor(tidy_human_psi_tbl$label, levels = rev(unique(event_order)))
+```
+
+```{r, save Human PRC2 data to file}
+write_delim(x = tidy_human_psi_tbl, delim = '\t', append = F, col_names = T,
+            file = file.path(tbl_dir_fig1, 'PRC2_Human_Events_PSI.tab'), 
+            progress = F, quote = 'all')
+```
+
+Quick exploration with a heatmap showing all samples against the PRC2 panAS event PSI to check how many samples are `NA`s shown in white.
+```{r, quick human heatmap, fig.width = 8, fig.height = 4}
+ggplot(tidy_human_psi_tbl) +
+  aes(x = Sample, y = label, fill = PSI) +
+  facet_grid( rows = vars(PRC2_Component), scales = "free_y", space = 'free', switch = "y" ) +
+  geom_tile() +
+  scale_fill_gradient2(low = "#E317BF", mid = "#E3C22D", high = "#11E3DA", 
+                       midpoint = 50, na.value = "black", limits = c(0, 100) ) + 
+  guides(fill = guide_colorbar(barwidth = grid::unit(x = 11,"cm"),
+                               barheight = grid::unit(x = 2, 'mm'))) +
+  theme_classic(base_family = "Arial") +
+  theme(legend.position = "bottom",
+        legend.background = element_blank(),
+        legend.title = element_text(vjust = 1),
+        axis.text = element_text(colour = "black"),
+        axis.text.x = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line = element_blank(),
+        strip.background = element_blank())
+```
+
+Plot each sample's PSI as points and colour code them by vast-tools quality score. The black horizontal line indicates median PSI across all samples. This serves to show that the overall quantifications have good coverage.
+
+```{r, fig.height=8, fig.width=12}
+quality_score_colors <- c("#ffffcc", "#c2e699", "#78c679", "#31a354", "#006837")
+quality_score_values <- c("N", "VLOW", "LOW", "OK", "SOK")
+names(quality_score_colors) <- quality_score_values
+
+tidy_human_psi_tbl |>
+  group_by(EVENT) |>
+  mutate(median_PSI = median(PSI, na.rm = T)) |>
+  ggplot() + 
+    aes(x = Sample, y = PSI, fill = Quality_Score_Value) + 
+    facet_wrap( ~ label, ncol = 4) + 
+    geom_point(size = 2, shape = 21) + 
+    geom_hline(aes(yintercept = median_PSI)) +
+    scale_fill_manual(values = quality_score_colors, name = "Score") + 
+    scale_y_continuous(breaks = seq(0, 100, 10), 
+                       expand = expansion(mult = 0, add = c(0.1, 5))) +
+    guides(fill = guide_legend(override.aes = list(shape = 21))) + 
+    coord_cartesian(clip = "on") +
+    theme_classic(base_family = "Arial") + 
+    theme(axis.text = element_text(colour = "black"), 
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          strip.background = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.major.y = element_line(linewidth = 0.2),
+          legend.position = c(0.95, 0.1))
+```
+
+Make a heatmap with only the median PSI and number of samples in each AS event. Add a sample grouping step by category, then use that on the x-axis.
+```{r, prepare for heatmap}
+blck_wht_PSI_col_thshld <-  70
+
+tidy_human_psi_tbl |>
+  select(EVENT, Category, Category_Short, label, median_PSI, PRC2_Component) |>
+  unique() |>
+  mutate(txt_colour = case_when(median_PSI >= blck_wht_PSI_col_thshld ~ "white",
+                                median_PSI < blck_wht_PSI_col_thshld ~ "black")) -> txt_human_psi
+
+num_categories_x <- length(unique(tidy_human_psi_tbl$Category_Short))
+min_PSI <- 50
+
+PSI_txt_size <- 1.8
+select(tidy_human_psi_tbl, label, ORF, PRC2_Component) |>
+  unique() -> ORF_labels
+```  
+
+## Plot heatmap
+
+Make Figure 1A
+
+```{r, heatmap human, fig.width = 4.5, fig.height = 3.5}
+tidy_human_psi_tbl |>
+  ggplot() +
+    aes(x = Category_Short, y = label, fill = median_PSI) +
+    facet_grid(rows = vars(PRC2_Component), scales = "free_y", 
+               space = 'free', switch = "y" ) +
+    geom_tile() +
+    geom_text(data = txt_human_psi, show.legend = F,
+              aes(label = round(median_PSI, 0), color = txt_colour),
+              family = "Arial", size = PSI_txt_size ) +
+    geom_text(data = ORF_labels, inherit.aes = F, 
+              aes(x = num_categories_x + 0.75, y = label, label = ORF),
+              family = "Arial", size = PSI_txt_size) +
+    scale_colour_manual(values = c("black", "white")) +
+    scale_fill_continuous(type = "viridis", direction = -1,
+                          limits = c(min_PSI, 100),
+                          breaks = seq(min_PSI, 100, 10),
+                          name = "Median\nPSI") +
+    scale_x_discrete(expand = expansion(add = c(0, 0.75), mult = c(0, 0)) ) +
+    scale_y_discrete(expand = expansion(add = 0, mult = 0)) +
+    guides(fill = guide_colorbar(barheight = grid::unit(x = 2.2,"cm"), 
+                                 barwidth = grid::unit(x = 1.5,"mm"))) +
+    coord_cartesian(clip = 'off') +
+    theme_classic(base_size = 6, base_family = "Arial") +
+    theme(legend.position = "right",
+          axis.text = element_text(colour = "black"),
+          axis.text.y = element_text(size = 5, hjust = 1,
+                                     margin = margin(r = -0.5, unit = "mm")),
+          axis.text.x = element_text(size = 5, hjust = 1, angle = 25,
+                                     margin = margin(t = -0.75, r = -1, unit = "mm") ),
+          axis.line = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          strip.background = element_blank(),
+          strip.text.y =  element_text(margin = margin(r = 0, unit = "mm")),
+          strip.placement = 'outside',
+          legend.text.align = 0,
+          legend.text = element_text(size = 5, family = "Arial", hjust = 0, 
+                                     margin = margin(l = 0, unit = "mm")),
+          legend.title = element_text(size = 5, family = "Arial", vjust = 0, hjust = 0),
+          legend.margin = margin(t = 0, l = 0, unit = "mm"),
+          legend.background = element_blank(),
+          legend.box.background = element_blank(),
+          panel.spacing.y = unit(2, 'mm'),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          ) -> p_human_psi
+p_human_psi
+```
+
+Save to pdf.
+```{r, save fig1a to pdf}
+ggsave(filename = "Fig1A_Human_PRC2_AS_events_PSI.pdf", plot = p_human_psi,
+       device = cairo_pdf, path = pdf_dir_fig1, width = 4.5, height = 3.5, units = "cm")
+```
+
+## Import PSI tables from different species
+
+```{r, sunset only SUZ12}
+suze12_human_psi_tbl <- subset(tidy_human_psi_tbl, GENE == "SUZ12")
+```
+
+```{r, define species tab}
+mouse_tbl <- file.path(tbl_dir_fig1, 'Mouse_Suz12_exon4_PSI_n159_samples.tab')
+cow_tbl <- file.path(tbl_dir_fig1, 'Cow_SUZ12_exon4_PSI_n44_samples.tab')
+opossum_tbl <- file.path(tbl_dir_fig1, 'Opossum_Suz12_exon4_PSI_n44_samples.tab')
+chicken_tbl <- file.path(tbl_dir_fig1, 'Chicken_SUZ12_exon4_PSI_n61_samples.tab')
+zfish_tbl <- file.path(tbl_dir_fig1, 'Zebrafish_suz12_exon4_PSI_n60_samples.tab')
+shark_tbl <- file.path(tbl_dir_fig1, 'Shark_suz12_exon4_PSI_n20_samples.tab')
+NoVST_tbl <- file.path(tbl_dir_fig1, 'NonVastToolsSpecies_SUZ12_exon4_PSI_n45_samples.tab')
+```
+
+```{r, import tables}
+lapply( list(mouse_tbl, zfish_tbl), function(x){
+  read_delim(file = x, delim = "\t", locale = locale(decimal_mark = "."),
+             show_col_types = FALSE)
+}) -> m_z_species_tbls
+
+Suz12_PSI_2_Species <- do.call('rbind', m_z_species_tbls)
+Suz12_PSI_3_Species <- rbind(suze12_human_psi_tbl[, colnames(Suz12_PSI_2_Species)], Suz12_PSI_2_Species)
+
+# Filter out low PSI
+Suz12_PSI_3_Species <- subset(Suz12_PSI_3_Species, !is.na(PSI) & Quality_Score_Value != "N")
+
+# Remove underscore
+Suz12_PSI_3_Species$Category <- gsub("_", " l", Suz12_PSI_3_Species$Category )
+Suz12_PSI_3_Species$Category <- factor(Suz12_PSI_3_Species$Category,
+                                       levels = c("Embryonic", "Neuronal", "Epithelial",
+                                                  "Glandular",  "Other", "Cell lines"))
+```
+
+Import 11 species PSI quantification measured with and without vast-tools
+```{r, vertebrates PSI quantifications}
+vast_tools_species <- list(cow_tbl, opossum_tbl, chicken_tbl, shark_tbl )
+
+lapply( vast_tools_species, function(x){
+  read_delim(file = x, delim = "\t", locale = locale(decimal_mark = "."),
+             show_col_types = FALSE)
+}) -> four_species_tbls
+
+Suz12_PSI_VST_Species <- do.call('rbind', four_species_tbls)
+# remove low quality PSI
+Suz12_PSI_VST_Species <- subset(Suz12_PSI_VST_Species, Quality_Score_Value != "N")
+
+Suz12_PSI_NON_VST_Species <- read_delim(file = NoVST_tbl, delim = "\t", 
+                                        locale = locale(decimal_mark = "."),
+                                        show_col_types = FALSE)
+# Merge the 2 datasets
+cols_to_keep <- colnames(Suz12_PSI_NON_VST_Species)[colnames(Suz12_PSI_NON_VST_Species) %in% colnames(Suz12_PSI_VST_Species)]
+Suz12_PSI_Species <- rbind(Suz12_PSI_VST_Species[cols_to_keep], Suz12_PSI_NON_VST_Species)
+
+# merge with previously importated species
+Suz12_PSI_Species <- rbind(Suz12_PSI_3_Species[, colnames(Suz12_PSI_Species)], Suz12_PSI_Species)
+
+message("Imported SUZ12 exon 4 PSI quantification for ", 
+        length(unique(Suz12_PSI_Species$Species)), " different species")
+
+# Fix one name
+Suz12_PSI_Species[Suz12_PSI_Species$Species == "ElephantShark", ]$Species <- "Elephant\nShark"
+
+species_order <- c("Human", "Mouse", "Cow", "Manatee", "Elephant", "Armadillo",
+                   "Opossum", "Platypus", "Chicken", "Zebrafish", "Elephant\nShark")
+
+# check that all species are there
+stopifnot( all( species_order %in% unique(Suz12_PSI_Species$Species) ) )
+# Define order for plot
+Suz12_PSI_Species$Species <- factor(Suz12_PSI_Species$Species, 
+                                    levels = species_order)
+```
+
+## SUZ12 exon 4 is a PanAS
+
+Plot PSI across 3 vertebrate species. Remove samples that have a `NA` PSI or have a very low quality score of the PSI (probably due to low coverage of the exon or lack of gene expression).
+
+```{r, calculate summary statistics for 3 species}
+Suz12_PSI_3_Species |>
+  group_by(Species, Category) |>
+  summarise(Median_PSI = median(PSI, na.rm = T),
+            Mean_PSI = mean(PSI, na.rm = T ),
+            Sd_PSI = sd(PSI, na.rm = T),
+            Num_Tissues = n_distinct(Group),
+            Num_Samples = n(), .groups = 'keep' ) |>
+  mutate(Num_T_S = paste0("(t = ", Num_Tissues, ", n = ", Num_Samples,")"),
+         Num_S = paste0("(", Num_Samples, ")") ) -> summary_stats3
+```
+
+Make figure 1C
+```{r, panel 1C, fig.width = 8.5, fig.height = 4.2}
+min_Y_PSI <- 50
+
+set.seed(16)
+ggplot(Suz12_PSI_3_Species) +
+  aes(x = Category, y = PSI, fill = Category) +
+  facet_grid(~ Species,  scales = "free", space ='free') +
+  # geom_violin(show.legend = F, draw_quantiles = 0.5, trim = T, scale = "width")+
+  geom_boxplot(show.legend = F, outlier.shape = NA, lwd = 0.125, width = 0.85) +
+  geom_quasirandom(data = subset(Suz12_PSI_3_Species, Species %in% c("Human", "Mouse") ),
+                   shape = 21, show.legend = F, size = 0.45, alpha = 0.75, #scale = "width",
+                   stroke = 0.16) +
+  geom_point(data = subset(Suz12_PSI_3_Species, Species == "Zebrafish"),
+             shape = 21, show.legend = F, size = 0.45, alpha = 0.75,
+             position = position_jitter(), stroke = 0.16) +
+  geom_text(data = summary_stats3, aes(y = min_Y_PSI + 3.5, x = Category, label = Num_S), 
+            size = 1.75, family = "Arial", hjust = 0.5) + 
+  scale_fill_manual(values = c('Embryonic' = "#FAB255", 'Neuronal' = "#8CB271",
+                               'Epithelial' = "#38A68A", 'Glandular' = "#19859C",
+                               'Other' = "#DD5129", "#616A71" = 'Cell lines') ) +
+  scale_y_continuous(expand = expansion(add = c(0, 2), mult = 0), n.breaks = 5 ) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 1), expand = expansion(mult = c(0.1, 0), add = 0) ) +
+  coord_cartesian(ylim = c(min_Y_PSI, 100), clip = 'off')  +
+  PSI_plot_theme -> p_h_m_z_tissues
+
+p_h_m_z_tissues
+ 
+ggsave(filename = "Fig1C_SUZ12_exon4_PSI_by_Tissue_Boxplot.pdf", 
+       plot = p_h_m_z_tissues, device = cairo_pdf,
+       path = pdf_dir_fig1, width = 8.5, height = 4.2, units = "cm")
+```
+
+## SUZ12 Exon 4 PSI in 11 species 
+
+```{r, calculate summary statistics for many species}
+Suz12_PSI_Species |>
+  group_by(Species) |>
+  summarise(Median_PSI = median(PSI, na.rm = T),
+            Mean_PSI = mean(PSI, na.rm = T ),
+            Min_PSI = min(PSI, na.rm = T),
+            Sd_PSI = sd(PSI, na.rm = T),
+            Num_Tissues = n_distinct(Group),
+            Num_Samples = n()) |>
+  mutate(Num_T_S = paste0("(t = ", Num_Tissues, ", n = ", Num_Samples,")"),
+         Num_S = paste0("(", Num_Samples,")") ) -> summary_stats
+```
+
+Print summary statistics of PSI in different species
+```{r, pretty print summary stats}
+#| tbl-cap: "Summary statistics of SUZ12 exon 4 PSI across different species"
+#| tbl-colwidths: [60,40]
+kable(mutate(summary_stats, across(.cols = where(is.numeric), \(x) round(x, 1) ) ) )
+```
+
+Prepare the data for figure 1E
+```{r, prepare for figure 1e}
+# Define species with constitutive or alternative splicing pattern
+CONST_species <- as.character(subset(summary_stats, Median_PSI == 100)$Species)
+AS_species <- as.character(subset(summary_stats, Median_PSI != 100)$Species)
+
+Suz12_PSI_Species <- subset(Suz12_PSI_Species, !is.na(PSI)) |>
+  mutate(AS_Pattern = case_when(Species %in% AS_species ~ "Alternative",
+                                Species %in% CONST_species ~ "Constitutive") )
+
+# Cow Epididymus has a PSI lower than 50
+Suz12_PSI_Species[which(Suz12_PSI_Species$PSI < min_Y_PSI), c('Sample', 'Species', 'PSI')]
+# For plotting reasons I omit only this point form the plot
+
+message('Total number of samples quantified: ', nrow(Suz12_PSI_Species) )
+Suz12_PSI_Species <- subset(Suz12_PSI_Species, PSI >= min_Y_PSI)
+
+message('Total number of samples with PSI equal or above ', min_Y_PSI, '%: ', 
+        nrow(Suz12_PSI_Species) )
+```
+
+Make figure 1E
+```{r, panel 1e, fig.width = 8.5, fig.height = 4.2}
+set.seed(16)
+ggplot() +
+  aes(x = Species, y = PSI, fill = AS_Pattern) +
+  geom_violin(data = Suz12_PSI_Species, show.legend = F, fill = NA, draw_quantiles = 0.5, trim = T, 
+              scale = "width", lwd = 0.125, width = 0.85) +
+  geom_quasirandom(data = subset(Suz12_PSI_Species, AS_Pattern == "Alternative" ),
+            shape = 21, show.legend = F, size = 0.45, stroke = 0.16) +
+  geom_point(data = subset(Suz12_PSI_Species, AS_Pattern == "Constitutive" ),
+             shape = 21, show.legend = F, size = 0.45, alpha = 0.75,
+             position = position_jitter(), stroke = 0.16) +
+  geom_text(data = summary_stats, inherit.aes = F, family = "Arial",
+            aes(y = min_Y_PSI + 3.5, x = Species, label = Num_S), size = 1.75, hjust = 0.5) + 
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ),
+                     n.breaks = 5, limits = c(min_Y_PSI, 101) ) +
+  scale_x_discrete(guide = guide_axis(n.dodge = 1), 
+                   expand = expansion(mult = c(0.05, 0), add = 0) ) +
+  scale_fill_manual(values = met.brewer("Manet", n = 6, direction = -1, type = "continuous") ) +
+  coord_cartesian(clip = 'off')  +
+  labs(y = "SUZ12 exon 4 PSI") +
+  PSI_plot_theme -> p_AS_across_vertebrates
+
+p_AS_across_vertebrates
+
+ggsave(filename = "Fig1E_SUZ12_exon4_PSI_in_Vertebrates_Violin.pdf", 
+       plot = p_AS_across_vertebrates, device = cairo_pdf,
+       path = pdf_dir_fig1, width = 8.5, height = 4.2, units = "cm")
+```
+
+## Minigene PSI quantifcations
+
+Import minigene quantifications.
+```{r, import minigene psi}
+quant_file <- file.path(tbl_dir_fig1, 
+                        'Suz12_exon4_minigene_PSI_quantifications.xlsx')
+
+mg_psi <- read_excel(path = quant_file, 
+                     col_types = c("text", "text", "text", "text", "numeric") ) |>
+  mutate(Species = factor(Species, levels = c('Mouse', 'Opossum') ),
+         Exon = factor(Species, levels = c('WT', 'Mutant') ),
+         Sample = factor(Sample, 
+                         levels = c("Mouse_WT", "Mouse_Ancestral",
+                                    "Opossum_WT", "Opossum_Eutherian"))) 
+mg_psi |>
+  group_by(Sample, Species) |>
+  summarise(Mean_PSI = mean(PSI, na.rm = T),
+            Sd_PSI = sd(PSI, na.rm = T),
+            .groups = 'keep') -> stats_mg_psi
+```
+
+Make bar plot for figure 1G.
+```{r, fig1g, fig.width = 3.2, fig.height = 2.5}
+ggplot(mg_psi) +
+  aes(x = Sample, group = Sample, fill = Sample) +
+  geom_col(data = stats_mg_psi, aes(y = Mean_PSI), width = 0.50,
+           colour = 'black', linewidth = 0.1 ) +
+  geom_errorbar(data = stats_mg_psi, 
+                aes(ymin = Mean_PSI - Sd_PSI, ymax = Mean_PSI + Sd_PSI),
+                color = "black", width = 0.2, linewidth = 0.2 ) +
+  geom_quasirandom(aes(y = PSI), stroke = 0.2, size = 1, width = 0.33,
+                   shape = 21, fill = 'white') +
+  geom_signif(comparisons = list( c("Mouse_WT", "Mouse_Ancestral"), 
+                                  c("Opossum_WT", "Opossum_Eutherian") ),
+              aes(y = PSI), test = "wilcox.test", margin_top = 0.1,
+              tip_length = 0.02, size = 0.2, family = 'Arial', vjust = -0.1,
+              textsize = 1.5) +
+  scale_x_discrete(labels = c('Mouse\nWT', 'Mouse\nAncestral Mut.',
+                              'Opossum\nWT', 'Opossum\nPlacental Mut.'),
+                   expand = expansion(mult = c(0.1, 0), add = 0.1)) +
+  scale_y_continuous(breaks = seq(50, 100, 10), 
+                     expand = expansion(mult = c(0, 0.1), add = 0) ) +
+  scale_fill_manual(values = c('dodgerblue', 'darkorchid', 'dodgerblue4', 'darkorchid4') ) +
+  coord_cartesian(ylim = c(50, 100) ) +
+  labs(y = 'PSI') +
+  theme_bw(base_family = 'Arial', base_size = 5) +
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(linewidth = 0.1),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.border = element_blank(),
+        plot.background = element_blank(),
+        axis.text = element_text(colour = 'black'),
+        axis.text.x = element_text(margin = margin(t = -2)),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(margin = margin(l = -2, r = -1.5)),
+        axis.ticks.x = element_blank(),
+        axis.ticks = element_line(colour = 'black', linewidth = 0.1),
+        axis.ticks.length = unit(x = 1, units = 'mm'),
+        axis.line = element_line(colour = 'black', linewidth = 0.1),
+        legend.position = 'none') -> p_MiniGene
+
+p_MiniGene
+
+ggsave(filename = 'Fig1G_SUZ12_exon4_Minigene_PSI_Quantification_Barplot.pdf',
+       plot = p_MiniGene, path = pdf_dir_fig1, device = cairo_pdf,
+       units = 'cm', width = 3.3, height = 2.75 )
+```
+
+# Supplementary figures
+Here's the code and analysis for the panels of supplementary figure 1.
+
+## Mouse ENCODE data to show panAS profile
+
+Extract and plot *Suz12* exon 4 PSI from the bulk RNA-seq of the ENCODE mouse development project[@He2020].
+
+The functions `get_mouse_tissue_devel_tbl()` and `plot_mouse_tissue_devel()` can be found in my package [niar](https://github.com/Ni-Ar/niar).
+
+```{r, encode data plot, fig.width = 2.6, fig.height = 2.6}
+get_mouse_tissue_devel_tbl(ensembl_gene_id = 'ENSMUSG00000017548', 
+                           vst_id = 'MmuEX0045831', filter_tbl = T) |>
+  plot_mouse_tissue_devel(colour_bar = 'viridis', PSI_limits = c(0, 100),  
+                          legend = 'inside') -> p_encode
+p_encode
+ggsave(filename = 'FigS1A_SUZ12_exon4_ENCODE_Mouse_Devel_Bubble.pdf',
+     plot = p_encode, path = pdf_dir_fig1, device = cairo_pdf,
+     units = 'cm', width = 6.6, height = 6.6 )                         
+```
+
+## PSI in single cell datasets
+
+Import the vast-tools analysis of human [@Yan2013] and mouse[@Deng2014] single cell RNA-seq.
+
+```{r, import human and mouse single cell PSIs}
+Human_EarlyDev_path <- file.path(tbl_dir_fig1, "Human_SUZ12_exon4_PSI_n83_EarlyDev_SingleCells.tab")
+
+h_EarlyDev_sc <- read_delim(file = Human_EarlyDev_path, delim = '\t', show_col_types = FALSE) |>
+  mutate(Stage_Pretty = factor(Stage_Pretty, levels = c("8-cell", "Morula", "Blastocyst", "ESC") ) )
+
+Mouse_EarlyDev_path <- file.path(tbl_dir_fig1, "Mouse_SUZ12_exon4_PSI_n89_EarlyDev_SingleCells.tab")
+
+m_EarlyDev_sc <- read_delim(file = Mouse_EarlyDev_path, delim = '\t', show_col_types = FALSE) |>
+  mutate(Stage_Pretty = factor(Stage_Pretty, 
+                               levels = c('Zygote', '2-cell', '4-cell', "8-cell", "16-cell", "Blastocyst") ) )
+```
+
+Merge the 2 datasets together in one single dataframe.
+```{r, merge single cell data}
+EarlyDev_sc <- rbind(h_EarlyDev_sc, m_EarlyDev_sc) |>
+  mutate(Stage_Pretty = factor(Stage_Pretty, 
+                               levels = c('Zygote', '2-cell', '4-cell', "8-cell",
+                                          "16-cell", "Morula", "Blastocyst", "ESC") ) )
+```
+
+Calculate summary stats info.
+```{r, get stats single cell data}
+EarlyDev_sc |>
+  group_by(Species, Stage_Pretty) |>
+  summarise(Median_PSI = median(PSI, na.rm = T),
+            Mean_PSI = mean(PSI, na.rm = T ),
+            Sd_PSI = sd(PSI, na.rm = T),
+            Num_Stages = n_distinct(Stage_Pretty),
+            Num_Cells = n(),
+            .groups = 'keep') |>
+  mutate(Num_Stages_Cells = paste0("(t = ", Num_Stages, ", n = ", Num_Cells,")"),
+         Num_Cells = paste0("(", Num_Cells, ")") ) -> summary_stats_sc_earlyDev
+```
+
+Plot
+```{r, plot sigle cell data, fig.width = 3.8, fig.height = 1.45}
+set.seed(16)
+ggplot(EarlyDev_sc) +
+  aes(x = Stage_Pretty, y = PSI) +
+  facet_grid(~ Species,  scales = "free", space ='free') +
+  geom_boxplot(show.legend = F, outlier.shape = NA, lwd = 0.125, width = 0.85) +
+  geom_quasirandom(aes(fill = Quality_Score_Value), 
+                   shape = 21, size = 1, stroke = 0.1 ) +
+  geom_text(data = summary_stats_sc_earlyDev, aes(y = 5, x = Stage_Pretty, label = Num_Cells), 
+            size = 1.75, family = "Arial", hjust = 0.5) + 
+  scale_fill_manual(values = c('#c2e699', '#78c679', '#31a354', '#006837'), 
+                    name = "vast-tools\ncoverage",
+                    labels = c("Very low", 'Low', 'Okay', 'Super okay'),
+                    guide = guide_legend(override.aes = list(shape = 21))) +
+  scale_y_continuous(expand = expansion(add = c(1, 2), mult = 0), n.breaks = 5 ) +
+  coord_cartesian(ylim = c(0, 100), clip = 'off' ) +
+  PSI_plot_theme +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 1, 
+                                   margin = margin(t = -0.7, unit = 'mm')),
+        axis.ticks.x = element_blank(), 
+        strip.text.x = element_text(vjust = -1, size = 6),
+        legend.position = 'right',
+        legend.key = element_blank(),
+        legend.key.size = unit(1, 'mm') ) -> p_h_m_EarlyDev_sc
+
+p_h_m_EarlyDev_sc
+
+ggsave(filename = "FigS1B_SUZ12_exon4_SingleCell_EarlyDev_Boxplot.pdf", 
+       plot = p_h_m_EarlyDev_sc, device = cairo_pdf,
+       path = pdf_dir_fig1, width = 9.8, height = 3.7, units = "cm")
+```
+
+## Heatmaps of sequence alignments
+
+Using both manual curation and UCSC 100-way multiple genomes alignment data[@Miller2007], I extracted the genomic coordiantes of SUZ12 exon 4 in 153 vertebrates species. I total I extract 159 as some species (zebrafish, guppy, lyretail-cichlid, turquoise-killifish, medaka) have an extra round of whole genome duplication and there are 2 copies of SUZ12 for which it's hard to decide which is the ohnolog gene. SUZ12 exon 4 is 69 base pairs in all species and with the same intronic/exonic phase.
+
+With the help of my scripts (available at [here](https://github.com/Ni-Ar/msbt)) I download and parse exon 4 sequence and the neighbouring intronic regions for all 153 species programmatically using the UCSC GoldenPath genomes in 2bit format. 
+
+This command was used to retrieve exon 4 sequence slopped by 6 nucleotide positions both upstream and downstream, in a strand aware way.
+
+```{shell, echo = T, eval = F}
+./coord2seq.sh -t coordinate_files/SUZ12_Exon4_Gnathostomata_SpeciesN153_CoordN159.tab -u 6 -d 6 \
+							 -e coordinate_files/Eutheria_Marsupials_Others_n3groups.tab \
+							 -o examples/SUZ12_exon4_3groups
+```
+
+With the next 2 commands I retrieve the sequence of the upstream 200bp in intron 3 and the first 15bp of exon 4 to help with the multiple sequence alignment.
+
+```{shell, echo = T, eval = F}
+./coord2seq.sh -t coordinate_files/SUZ12_Exon4_Gnathostomata_SpeciesN153_CoordN159.tab -u 200 -d -54 \
+							 -e coordinate_files/Eutheria_Marsupials_Others_n3groups.tab \
+							 -o examples/SUZ12_exon4_Groups3_PyTract
+```
+
+And with this the some sequence width but the the first 200bp of intron 4 downstream of exon 4.
+ 
+```{shell, echo = T, eval = F}
+./coord2seq.sh -t coordinate_files/SUZ12_Exon4_Gnathostomata_SpeciesN153_CoordN159.tab -u -54 -d 200 \
+							 -e grouping_files/Eutheria_Marsupials_Others_n3groups.tab \
+							 -o examples/TEST_SUZ12_exon4_Groups3_Donwstream5ss
+```
+
+Next with the `R` script `seq2logo.R` the fasta files generated in the previous steps are processed and parsed into a logo. 
+
+```{shell, echo = T, eval = F}
+cd SUZ12_exon4_3groups_all
+mkdir Alignments
+muscle -align DNA/All_Seq_DNA_n159.fasta -output Alignments/All_Seq_DNA_n159.afa
+
+cd SUZ12_intron3_exon4_region_GroupsN4
+
+# re-order alignment as the input sequences
+python2 ~/projects/07_Suz12AS/src/stable.py DNA/All_Seq_DNA_n159.fasta Alignments/All_Seq_DNA_n159.afa  > Alignments/All_Seq_DNA_n159_ordered.afa 
+    
+# calculate percentage of identity between sequences.
+clustalo --infile Alignments/All_Seq_DNA_n159_ordered.afa --distmat-out pim/All_Seq_DNA_n159_ordered.pim --percent-id --full
+```
+
+Here I import the Percentage of Identity Matrices files
+```{r import pim }
+ex4_only_path <- list.files(fasta_dir_fig1, pattern = "All_Seq_Exon4_DNA_n159.pim", full.names = T)
+int3_ex4_path <- list.files(fasta_dir_fig1, pattern = "All_Seq_Intron3_Exon4_DNA_n159.pim", full.names = T)
+ex4_int4_path <- list.files(fasta_dir_fig1, pattern = "All_Seq_Exon4_Intron4_DNA_n159.pim", full.names = T)
+suzy_coord_path <- list.files(fasta_dir_fig1, pattern = "SUZ12_Exon4_Gnathostomata_SpeciesN153_CoordN159.tab", full.names = T)
+```
+
+```{r, import SUZ12 coordinates}
+read_table(file = suzy_coord_path, 
+           col_names = c('Species_Name', 'GenomeAssembly', 'chr', 'start', 'end', 'strand'), 
+           show_col_types = F) |>
+  mutate(Species_Assembly_Coord = paste0(Species_Name, "_", GenomeAssembly, "_", chr)) |>
+  relocate(Species_Assembly_Coord, .before = Species_Name) -> coord_info
+```
+
+Import exon4 Percentage Identity Matrix
+```{r exon4 PIM }
+read_table(file = ex4_only_path, col_names = FALSE, comment = "#", skip = 1, show_col_types = F) |> 
+  # remove reverse complement info
+  mutate(Species_Assembly_Coord = gsub(x = X1, pattern = "_ReverseComplement$", replacement = "" ),
+         # remove start-end info
+         Species_Assembly_Coord = gsub(x = Species_Assembly_Coord, pattern = "\\:.*$", replacement = "")) |>
+  relocate(Species_Assembly_Coord, .before = X1) |>
+  left_join(x = coord_info, by = "Species_Assembly_Coord") |>
+  select(-c(X1, chr, start, end, strand) ) |>
+  pivot_longer(cols = starts_with("X"), names_to = "Species_Order",
+               names_prefix = "X", values_to = "PI") |>
+  mutate(Species_Order = as.integer(Species_Order) -1,
+         Species_Name = fct_inorder(Species_Name) ) |> # factor order in which they appear
+  mutate(Region = "exon4") |>
+   as_tibble() -> All_Species_Exon4_df
+```
+
+Import exon4-intron4 Percentage Identity Matrix
+```{r exon4-intron4 PIM }
+read_table(file = ex4_int4_path, col_names = FALSE, comment = "#", skip = 1, show_col_types = F) |> 
+  # remove reverse complement info
+  mutate(Species_Assembly_Coord = gsub(x = X1, pattern = "_ReverseComplement$", replacement = "" ),
+         # remove start-end info
+         Species_Assembly_Coord = gsub(x = Species_Assembly_Coord, pattern = "\\:.*$", replacement = "")) |>
+  relocate(Species_Assembly_Coord, .before = X1) |>
+  left_join(x = coord_info, by = "Species_Assembly_Coord") |>
+  select(-c(X1, chr, start, end, strand) )  |>
+  pivot_longer(cols = starts_with("X"), names_to = "Species_Order",
+               names_prefix = "X", values_to = "PI") |>
+  mutate(Species_Order = as.integer(Species_Order) -1,
+         Species_Name = fct_inorder(Species_Name) ) |> # factor order in which they appear
+  mutate(Region = "exon4-intron4") |>
+  as_tibble() -> All_Species_Ex4Int4_df
+```
+
+Import intron3-exon4 Percentage Identity Matrix
+```{r intron3-exon4 PIM }
+read_table(file = int3_ex4_path, col_names = FALSE, comment = "#", skip = 1, show_col_types = F) |> 
+  # remove reverse complement info
+  mutate(Species_Assembly_Coord = gsub(x = X1, pattern = "_ReverseComplement$", replacement = "" ),
+         # remove start-end info
+         Species_Assembly_Coord = gsub(x = Species_Assembly_Coord, pattern = "\\:.*$", replacement = "")) |>
+  relocate(Species_Assembly_Coord, .before = X1) |>
+  left_join(x = coord_info, by = "Species_Assembly_Coord") |>
+  select(-c(X1, chr, start, end, strand) )  |>
+  pivot_longer(cols = starts_with("X"), names_to = "Species_Order",
+               names_prefix = "X", values_to = "PI") |>
+  mutate(Species_Order = as.integer(Species_Order) -1,
+         Species_Name = fct_inorder(Species_Name) ) |> # factor order in which they appear
+  mutate(Region = "intron3-exon4") |>
+  as_tibble() -> All_Species_Int3Ex4_df
+```
+
+Create a second ordering dataframe
+```{r, ordering step}
+select(All_Species_Exon4_df, c(Species_Name, Species_Order)) -> Name_Order_df
+
+cbind( as.character(unique(Name_Order_df$Species_Name)), 
+       unique(Name_Order_df$Species_Order) )  |>
+  as.data.frame() |>
+  setNames(nm = c("Species_Name2", "Species_Order")) |>
+  mutate(Species_Order = as.integer(Species_Order)) -> Name2_Order_df
+
+# combine
+rbind(All_Species_Exon4_df, All_Species_Ex4Int4_df, All_Species_Int3Ex4_df) |>
+  left_join(y = Name2_Order_df, by = "Species_Order") |>
+  relocate(Species_Name2, .before = Species_Order) |>
+  mutate(Species_Name2 = fct_relevel(.f = Species_Name2, rev(levels(Species_Name)))) |>
+  group_by(Region) |>
+  filter(row_number() <= which(Species_Name == Species_Name2)) |>
+  mutate(Region = factor(Region, levels = c("intron3-exon4", "exon4", "exon4-intron4") ) ) -> All_Species_All_Regions_PI_df
+
+num_species <- length(unique(All_Species_All_Regions_PI_df$Species_Name))
+```
+
+Make 3 heatmaps coloured by their sequence similarity
+```{r, make 3 pims heatmaps}
+min_Percent <- 20
+ggplot(All_Species_All_Regions_PI_df, aes(x = Species_Name, y = Species_Name2, fill = PI)) +
+  facet_wrap(~Region, ncol = 3) +
+      geom_tile() +
+      geom_text(data = subset(All_Species_All_Regions_PI_df, 
+                              Species_Name == Species_Name2), 
+                aes(label = gsub("_", " ", Species_Name) ), hjust = 0,
+                nudge_x = 2, size = 2, check_overlap = T, family = "Arial") +
+      scale_fill_viridis(breaks = seq(min_Percent, 100, length.out = 5), limits = c(min_Percent, 100)) +
+      guides(fill = guide_colourbar(title = "% Identity", 
+                                    barwidth = unit(5, "cm"), 
+                                    barheight = unit(2.5, "mm"),
+                                    title.vjust = 0.85 )) +
+      coord_fixed(clip = 'off', ratio = 1) +
+      theme_classic(base_family = "Arial") +
+      theme(axis.text.x = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title = element_blank(), 
+            axis.line = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 6, family = "Arial"),
+            legend.title = element_text(size = 6, family = "Arial"),
+            legend.margin = margin(t = -4, b = 0, unit = "mm"),
+            legend.background = element_blank(),
+            strip.background = element_blank(),
+            plot.caption = element_blank(),
+            panel.spacing.x = unit(12, units = 'mm'),
+            panel.background = element_blank(),
+            plot.background = element_blank(),
+            plot.margin = margin(l = -2, r =  -2, unit = "cm"),
+            ) -> p_pim3
+```
+
+Fig. S1C
+```{r, show 3 pims, fig.width = 9, fig.height = 3}
+p_pim3
+```
+
+Save the 3 heatmaps to pdf
+```{r, save to pdf 3 pims}
+ggsave(filename = "FigS1C_SUZ12_intr3_ex4_int4_Seq_Similarity_Vertebrates_Heatmap.pdf", 
+       plot = p_pim3, path = pdf_dir_fig1, device = cairo_pdf,
+       units = "cm", width = 22.9, height = 7.6)
+```
+
+
+::: {.callout-caution collapse="true"}
+## Note
+
+In the future I plan to improve and clean up the code above and turn into an R package. Check the GitHub repo [msbt](https://github.com/Ni-Ar/msbt) for future updates.
+:::
+
+Make also individual pim heatmaps of each region with different minimum percetage value.
+
+Exon 4:
+```{r, plot only exon 4 region pim, fig.width = 3.2, fig.height = 3}
+# subest pims for only exon 4 region
+ex4_PI_df <- subset(All_Species_All_Regions_PI_df, Region == "exon4")
+
+min_Percent <- 50
+ggplot(ex4_PI_df, aes(x = Species_Name, y = Species_Name2, fill = PI)) +
+  facet_wrap(~Region, ncol = 1) +
+      geom_tile() +
+      geom_text(data = subset(ex4_PI_df, Species_Name == Species_Name2), 
+                aes(label = gsub("_", " ", Species_Name) ), hjust = 0,
+                nudge_x = 2, size = 2, check_overlap = T, family = "Arial") +
+      scale_fill_viridis(breaks = seq(min_Percent, 100, length.out = 5), 
+                         limits = c(min_Percent, 100)) +
+      guides(fill = guide_colourbar(title = "% Identity", 
+                                    barwidth = unit(5, "cm"), 
+                                    barheight = unit(2.5, "mm"),
+                                    title.vjust = 0.85 )) +
+      coord_fixed(clip = 'off', ratio = 1) +
+      theme_classic(base_family = "Arial") +
+      theme(axis.text.x = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title = element_blank(), 
+            axis.line = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 6, family = "Arial"),
+            legend.title = element_text(size = 6, family = "Arial"),
+            legend.margin = margin(t = -4, b = 0, unit = "mm"),
+            legend.background = element_blank(),
+            strip.background = element_blank(),
+            plot.caption = element_blank(),
+            panel.spacing.x = unit(1, units = 'mm'),
+            panel.background = element_blank(),
+            plot.background = element_blank(),
+            plot.margin = margin(l = -2, r =  -2, unit = "cm"),
+            ) -> p_ex4_triangle1_pim
+
+p_ex4_triangle1_pim
+ggsave(filename = "FigS1C_SUZ12_ex4_Seq_Similarity_Vertebrates_Heatmap.pdf",
+       plot = p_ex4_triangle1_pim, device = cairo_pdf, 
+       path = pdf_dir_fig1, width = 8, height = 7.6, units = 'cm')
+```
+
+Intron 3:
+```{r, plot only intron 3 region pim, fig.width = 3.2, fig.height = 3}
+# subest pims for only intron 3 - exon 4 region
+in3ex4_PI_df <- subset(All_Species_All_Regions_PI_df, Region == "intron3-exon4")
+
+min_Percent <- 20
+ggplot(in3ex4_PI_df, aes(x = Species_Name, y = Species_Name2, fill = PI)) +
+  facet_wrap(~Region, ncol = 1) +
+      geom_tile() +
+      geom_text(data = subset(in3ex4_PI_df, Species_Name == Species_Name2), 
+                aes(label = gsub("_", " ", Species_Name) ), hjust = 0,
+                nudge_x = 2, size = 2, check_overlap = T, family = "Arial") +
+      scale_fill_viridis(breaks = seq(min_Percent, 100, length.out = 5), 
+                         limits = c(min_Percent, 100), na.value = "#440154FF") +
+      guides(fill = guide_colourbar(title = "% Identity", 
+                                    barwidth = unit(5, "cm"), 
+                                    barheight = unit(2.5, "mm"),
+                                    title.vjust = 0.85 )) +
+      coord_fixed(clip = 'off', ratio = 1) +
+      theme_classic(base_family = "Arial") +
+      theme(axis.text.x = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title = element_blank(), 
+            axis.line = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 6, family = "Arial"),
+            legend.title = element_text(size = 6, family = "Arial"),
+            legend.margin = margin(t = -4, b = 0, unit = "mm"),
+            legend.background = element_blank(),
+            strip.background = element_blank(),
+            plot.caption = element_blank(),
+            panel.spacing.x = unit(1, units = 'mm'),
+            panel.background = element_blank(),
+            plot.background = element_blank(),
+            plot.margin = margin(l = -2, r =  -2, unit = "cm"),
+            ) -> p_in3ex4_triangle1_pim
+
+p_in3ex4_triangle1_pim 
+ggsave(filename = "FigS1C_SUZ12_in3_Seq_Similarity_Vertebrates_Heatmap.pdf",
+       plot = p_in3ex4_triangle1_pim, device = cairo_pdf, 
+       path = pdf_dir_fig1, width = 8, height = 7.6, units = 'cm')
+```
+
+Intron 4:
+```{r, plot only intron 4 region pim, fig.width = 3.2, fig.height = 3}
+# subest pims for only exon 4  - intron 4 region
+ex4in4_PI_df <- subset(All_Species_All_Regions_PI_df, Region == "exon4-intron4")
+
+min_Percent <- 20
+ggplot(ex4in4_PI_df, aes(x = Species_Name, y = Species_Name2, fill = PI)) +
+  facet_wrap(~Region, ncol = 1) +
+      geom_tile() +
+      geom_text(data = subset(ex4in4_PI_df, Species_Name == Species_Name2), 
+                aes(label = gsub("_", " ", Species_Name) ), hjust = 0,
+                nudge_x = 2, size = 2, check_overlap = T, family = "Arial") +
+      scale_fill_viridis(breaks = seq(min_Percent, 100, length.out = 5), 
+                         limits = c(min_Percent, 100), na.value = "#440154FF") +
+      guides(fill = guide_colourbar(title = "% Identity", 
+                                    barwidth = unit(5, "cm"), 
+                                    barheight = unit(2.5, "mm"),
+                                    title.vjust = 0.85 )) +
+      coord_fixed(clip = 'off', ratio = 1) +
+      theme_classic(base_family = "Arial") +
+      theme(axis.text.x = element_blank(),
+            axis.text.y = element_blank(),
+            axis.title = element_blank(), 
+            axis.line = element_blank(),
+            axis.ticks = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 6, family = "Arial"),
+            legend.title = element_text(size = 6, family = "Arial"),
+            legend.margin = margin(t = -4, b = 0, unit = "mm"),
+            legend.background = element_blank(),
+            strip.background = element_blank(),
+            plot.caption = element_blank(),
+            panel.spacing.x = unit(1, units = 'mm'),
+            panel.background = element_blank(),
+            plot.background = element_blank(),
+            plot.margin = margin(l = -2, r =  -2, unit = "cm"),
+            ) -> p_ex4in4_triangle1_pim
+
+p_ex4in4_triangle1_pim 
+ggsave(filename = "FigS1C_SUZ12_in4_Seq_Similarity_Vertebrates_Heatmap.pdf",
+       plot = p_ex4in4_triangle1_pim, device = cairo_pdf, 
+       path = pdf_dir_fig1, width = 8, height = 7.6, units = 'cm')
+```
+
+
+## Sequence logos
+
+::: {.callout-note title="Definition" collapse="false"}
+Sequence logos are graphical presentation of patterns in aligned sequences[@Schneider1990], reviewd in [@Wasserman2004]. The specificity of each letter (i.e. nucleotide) at each position of the alignment is measured in bits which is a unit of information content.
+:::
+
+Specify the paths to the fasta files
+```{r, define fasta files paths}
+eutherians_path <- list.files(fasta_dir_fig1, pattern = 'All_Eutheria', full.names = T)
+marsupials_path <- list.files(fasta_dir_fig1, pattern = 'All_Masupialia-Monotremata', full.names = T)
+other_vertebrates_path <- list.files(fasta_dir_fig1, pattern = 'All_Reptilia-Amphibia-Fish', full.names = T)
+# stop if files don't exist
+stopifnot(file.exists(c(eutherians_path, marsupials_path, other_vertebrates_path)))
+```
+
+Plot the sequence logos of each group using my functions from the `niar` package.
+
+**Eutherians**, a.k.a. placental mammals
+
+```{r, Eutheria sequence logo, fig.width = 8,  fig.height = 1, warning = F, message = F}
+eutherians <- fasta2df(path = eutherians_path, ID_col = 'Species') 
+num_eutherian_species <- nrow(eutherians)
+
+eutherians_logo <- plot_bits_logo(df = eutherians, ID_col = 'Species', 
+                                  y_lims = c(0, 2), uppercase_spacer = 5, 
+                                  lowercase_spacer = 3, small_n_correction = T,
+                                  ttl_txt = paste0('Eutheria n = ', num_eutherian_species))  
+eutherians_logo
+```
+
+**Metatheria & monotremata**, a.k.a. non-placental mammals, a.k.a. marsupial plus platypus and echidna.
+
+```{r, Marsupials sequence logo, fig.width = 8, fig.height = 1, warning = FALSE, message = FALSE}
+marsupials <- fasta2df(path = marsupials_path, ID_col = 'Species') 
+num_marsupials_species <- nrow(marsupials)
+
+marsupials_logo <- plot_bits_logo(df = marsupials, ID_col = 'Species', 
+                                  y_lims = c(0, 2), uppercase_spacer = 5, 
+                                  lowercase_spacer = 3, small_n_correction = T,
+                                  ttl_txt = paste0('Marsupialia-Monotremata n = ', num_marsupials_species)) 
+# marsupials_logo
+```
+
+**Non-mammalian gnathostomata**, a.k.a. non-mammalian vertebrates minus the agnatha (lamprey and hagfish), a.k.a. reptilia (birds and reptiles) plus amphibians plus actinopterygii (boney fish) plus chondrichthyes (sharks and rays).
+
+```{r, other non-mammalian vertebrates sequence logo, fig.width = 8, fig.height = 1, warning = FALSE, message = FALSE}
+other_vertebrates <- fasta2df(path = other_vertebrates_path, ID_col = 'Species') 
+num_others_species <- nrow(other_vertebrates)
+
+others_logo <- plot_bits_logo(df = other_vertebrates, ID_col = 'Species', 
+                              y_lims = c(0, 2), uppercase_spacer = 5, 
+                              lowercase_spacer = 3, small_n_correction = T,
+                              ttl_txt = paste0('Reptilia-Amphibia-Fish n = ', num_others_species)) 
+# others_logo
+```
+
+Pile all the logos together for supplementary figure 1D.
+
+```{r, save all logos at once, fig.width = 8, fig.height = 3}
+all_logos <- wrap_plots(list(eutherians_logo, marsupials_logo, others_logo), 
+                        ncol = 1, nrow = 3)
+all_logos
+
+ggsave(filename = "FigS1D_SUZ12_ex4_Seq_Logos_Vertebrates.pdf",
+       plot = all_logos, device = cairo_pdf, 
+       path = pdf_dir_fig1, width = 16.75, height = 7, units = 'cm')
+```
+
+## Jensen-Shannon divergence
+
+To measure how much the nucleotide bits changes at each position between 2 multiple sequence alignments I calculate the Jensen-Shannon divergence (JSD). The idea was inspired by the *DiffLogo* package[@Nettling2015].
+
+Calculate the divergence between placental mammals and non-placental mammals. The positions in which the 2 information contents have a Jensen-Shannon divergence higher than 0.02 are highlighted by grey vertical bars.
+
+```{r, Mammals JSD, fig.width = 8,  fig.height = 1, warning = F, message = F}
+mammals_jsd <- plot_JSD_logo(df1 = eutherians, df2 = marsupials, ID_col = 'Species',
+                             max_JS_div_thrshld = 0.02, uppercase_spacer = 5,
+                             anno_width = 0.6, axis_txt_size = 6,
+                             lowercase_spacer = 3, y_lims = c(-0.5, 0.5),
+                             ttl_txt = 'Eutheria vs Marsupialia-Monotremata')  
+mammals_jsd
+ggsave(filename = "FigS1E_SUZ12_ex4_vsMarsupials_JSD_Logos.pdf",
+       plot = mammals_jsd, device = cairo_pdf, 
+       path = pdf_dir_fig1, width = 16.75, height = 2.25, units = 'cm')
+```
+
+::: {.callout-note}
+In opossum position 3, 19, 48, 58, and 61 the nucleotide is identical to the mouse sequence, so no mutation was performed. And in the paper figure the vertical bars are also remove. Intronic changes are also discarded. 
+:::
+
+Do the same analysis but now combined together the marsupials and other vertebrates sequence. Note how some of the nucleotides with high divergence between placental mammals and marsupials are also present in the comparison between placental mammals and all other jawed vertebrates (gnathostomata).
+
+```{r, Vertebrates JSD, fig.width = 8, fig.height = 1, warning = F, message = F}
+vertebrates_jsd <- plot_JSD_logo(df1 = eutherians, 
+                                 df2 = rbind(marsupials, other_vertebrates),
+                                 ID_col = 'Species', uppercase_spacer = 5,
+                                 lowercase_spacer = 3, 
+                                 y_lims = c(-0.5, 0.5), axis_txt_size = 6,
+                                 ttl_txt = 'Eutheria vs all other vertebrates')  
+vertebrates_jsd
+ggsave(filename = "FigS1E_SUZ12_ex4_vsOthers_JSD_Logos.pdf",
+       plot = vertebrates_jsd, device = cairo_pdf, 
+       path = pdf_dir_fig1, width = 16.75, height = 2.25, units = 'cm')
+```
+
+Combine the JSD logos together for supplementary figure 1E.
+
+```{r, save all JSD logos at once, fig.width = 8, fig.height = 2}
+all_jsd_logos <- wrap_plots(list(mammals_jsd, vertebrates_jsd), ncol = 1, nrow = 2)
+all_jsd_logos
+
+ggsave(filename = "FigS1E_SUZ12_ex4_Seq_JSD_Logos.pdf",
+       plot = all_jsd_logos, device = cairo_pdf, 
+       path = pdf_dir_fig1, width = 16.7, height = 4.5, units = 'cm')
+```
+
+End of figure 1 and S1 analysis.
+
+# Session Info {#sec-sessioninfo}
+
+```{r, print session info}
+sessioninfo::session_info()
+```

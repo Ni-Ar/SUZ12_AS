@@ -1,0 +1,38 @@
+# System files
+.fuse_hidden*
+.DS_Store
+._.DS_Store
+._*
+
+# Temporary files created by R markdown
+*.utf8.md
+*.knit.md
+
+# Session Data files
+.RData
+
+# History files
+.Rhistory
+.Rapp.history
+
+## for initial comit, then after clean up add it
+# Figures
+_Figures/All_Fig_*
+_Figures/Fig*
+_Figures/Supplementary_Fig*
+_Figures/Schemes*
+_Figures/Twitter*
+_Figures/plots*
+_Figures/various*
+
+# Old analysis code
+_Code/PreRevision_Analysis*
+
+# All slides
+_Slides/*
+
+# All numbered subfolders
+0*
+1*
+2*
+3*

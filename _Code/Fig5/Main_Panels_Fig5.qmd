@@ -1,0 +1,510 @@
+---
+title: "Figure 5 and supplementary figure 5"
+author: "Niccolò Arecco & Ivano Mocavini"
+toc: true
+number-sections: true
+highlight-style: pygments
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-copy: true
+    theme:
+      light: flatly
+      dark: darkly
+editor: source
+bibliography: ../Paper_Analysis_References.bib
+---
+
+Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
+
+# Intro
+
+ChIP-seq analysis.
+
+# Set Up
+
+General info.
+
+## Packages
+
+Load packages required for the analysis and suppress any message. Check the @sec-sessioninfo section at the end for package versions.
+
+```{r, Loading required packages, warning = T, message = FALSE}
+library(dplyr, warn.conflicts = F, quietly = T)
+library(readr)
+library(stringr)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+library(ggh4x)
+library(ggrastr)
+library(DT)
+```
+
+## Functions
+
+Define a plot style.
+```{r, label = "ggplot themes", eval = T}
+theme_classic(base_family = 'Arial', base_size = 6) +
+  theme(axis.text = element_text(colour = 'black'),
+        axis.ticks.length = unit(1, 'mm'),
+        axis.ticks = element_line(linewidth = 0.1),
+        axis.line = element_line(linewidth = 0.1),
+        axis.title = element_text(size = 5),
+        panel.grid.major = element_line(linewidth = 0.2, colour = 'gray84'),
+        strip.text = element_text(size = 10),
+        strip.background = element_blank(),
+        legend.title = element_blank(), 
+        legend.key.size = unit(1, 'mm'),
+        legend.position = c(0.21, 0.92),
+        legend.box.background = element_blank(),
+        legend.margin = margin(t = -1, b = 1, unit = 'mm'),
+        plot.background = element_blank(),
+        panel.background = element_blank()) -> scatter_th
+```
+
+Helper functions for the  analysis
+```{r, funtions used in this analysis}
+
+```
+
+## Directories & File Paths
+
+Here I organise all the file and directories- paths I need to run the analysis and define where to save the processed tables and figures.
+
+```{r, set paths and dicretories, warning = FALSE, message = FALSE}
+oneDrive_Dir <- file.path("~/OneDrive - CRG - Centre de Regulacio Genomica/Suz12_AS_project")  
+code_dir_fig <- file.path(oneDrive_Dir, "_Code/Fig5")
+tbl_dir_fig5 <- file.path(code_dir_fig, "tables")
+pdf_dir_fig5 <- file.path(code_dir_fig, "pdfs")
+
+if (!dir.exists(pdf_dir_fig5)) { dir.create(pdf_dir_fig5, recursive = T) }
+if (!dir.exists(tbl_dir_fig5)) { dir.create(tbl_dir_fig5, recursive = T) }
+```
+
+Path to DropBox folders where Enrique releases the documents.
+
+```{r, paths to dropbox}
+dropbox_dir <- file.path('~/Dropbox (CRG ADV)/54_Suz12AS')
+
+round17_meta_dir <- file.path(dropbox_dir, 'ROUND17_Figure3/01_files_for_boxplotofmetaplots')
+round17_scatter_dir <- file.path(dropbox_dir, 'ROUND17_Figure3/02_files_for_scattersboxplots')
+```
+
+# Main Figure Panels
+
+## H3K27me3 signal in 2.5kb genomic bins
+
+Import all 2.5 kb bins of H3K27me3.
+
+```{r, import H3K27me3 bins of 2.5kb bins}
+all_bins25kb_K27me3 <- read_delim(file = file.path(round17_scatter_dir, 'H3K27me3_R3all_bins_2.5Kb_yes.txt'),
+                                  delim = '\t', progress = F,
+                                  col_names = c('bin', "WT", 'CSex4', 'dex4', 'KO'),
+                                  show_col_types = FALSE) |>
+  mutate(chr = str_split_fixed(pattern = "\\*", string = bin, n = 3)[,1],
+         start = str_split_fixed(pattern = "\\*", string = bin, n = 3)[,2],
+         end = str_split_fixed(pattern = "\\*", string = bin, n = 3)[,3]) |>
+  relocate(chr, start, end, .after = bin) 
+```
+
+Import the annotated bins that belong to SUZ12 targeted CGI and those that contain a CGI that is not target
+
+```{r, import bins of CGIs and others}
+bins25kbK27me3_CGI_SUZ12 <- read_delim(
+  file = file.path(round17_scatter_dir, 'H3K27me3_R3all_bins_2.5Kb_yes_CGI-SUZ12.txt'),
+  delim = c(' '), col_names = c('bin', "garbage"), show_col_types = FALSE
+  )
+
+bins25kbK27me3_other_CGI <- read_delim(
+  file = file.path(round17_scatter_dir, 'H3K27me3_R3all_bins_2.5Kb_yes_CGI-NOPCG.txt'), 
+  delim = c(' '), col_names = c('bin', "garbage"), show_col_types = FALSE
+  )
+```
+
+Check how many of the total bins are in each set (SUZ12 targeted CGIs or others CGIs). 
+```{r, check imported bins}
+table(all_bins25kb_K27me3$bin %in% bins25kbK27me3_CGI_SUZ12$bin)
+table(all_bins25kb_K27me3$bin %in% bins25kbK27me3_other_CGI$bin)
+```
+
+Map the total bins in each set
+```{r, map bins}
+all_bins25kb_K27me3 |>
+  mutate(type = case_when(bin %in% bins25kbK27me3_CGI_SUZ12$bin ~ "PcG targeted CGI",
+                          bin %in% bins25kbK27me3_other_CGI$bin ~ "Other CGI") ) |>
+  mutate(type = ifelse(is.na(type), yes = "Rest of the genome", no = type )
+         ) -> all_bins25kb_K27me3
+```
+
+Set bin type as factor.
+
+```{r, factorise bins types}
+all_bins25kb_K27me3$type <- factor(all_bins25kb_K27me3$type,
+                                   levels = c("PcG targeted CGI", "Other CGI", "Rest of the genome") )
+```
+
+Overview of bins file
+```{r, data table K36}
+datatable(head(all_bins25kb_K27me3, 150), rownames = FALSE, filter = 'top', 
+          options = list(pageLength = 5, autoWidth = TRUE) )
+```
+
+Define the flanking bins (-1 and +1 bins) surrounding CGI.
+```{r, PcG target index}
+indx_targeted <- which(all_bins25kb_K27me3$type == "PcG targeted CGI")
+message(length(indx_targeted), ' PcG targeted bins')
+```
+
+Get first the +1 bins:
+
+If the difference in index number between the targeted bin and the + 1 is 1, meaning the 2 PcG targeted CGI are one next to each other, exclude the +1 bins. Otherwise, label every +1 index number as downstream flanking PcG targeted CGI.
+
+```{r, get flanking downstream bins}
+plus_one_targeted <- c()
+for (i in 1:(length(indx_targeted)-1) ) {
+  
+  if ( (indx_targeted[i + 1] - indx_targeted[i]) == 1 ) {
+    # Do no nothing
+    plus_one_targeted[i] <- 0
+    
+  } else {
+    plus_one_targeted[i] <- indx_targeted[i] + 1
+  }
+}
+```
+
+Here's an example 
+```{r, example of plus one selection}
+message('Targeted indexes:\t', paste0(head(indx_targeted, 7), sep = ' ') )
+message('Flanking +1 indexes:\t', paste0(head(plus_one_targeted, 7), sep = ' ') )
+```
+
+Since bins numbered `2647` and `2648` are next to each other, the bin numbered `2649` is selected and there's a `0` for the `2648`. By removing the zeros I remove the consecutive CGI bins.
+
+```{r, remove plus one consecutive bins}
+plus_one_targeted <- plus_one_targeted[plus_one_targeted != 0]
+```
+
+Get the -1 bins:
+here the logic is the same as above, but inverted. If the difference in index number between the targeted bin and the -1 bin is 1, meaning the 2 PcG targeted CGI are one next to each other, exclude the -1 bins.
+```{r, get flanking upstream bins}
+minus_one_targeted <- c()
+for (i in 2:(length(indx_targeted)) ) {
+  
+  if ( ( indx_targeted[i] - indx_targeted[i - 1] ) == 1 ) {
+    # Do no nothing
+    minus_one_targeted[i] <- 0
+    
+  } else {
+    minus_one_targeted[i] <- indx_targeted[i] - 1
+  }
+}
+```
+
+Remove first NA, and consecutive bins defined by zeros.
+```{r, remove NA}
+minus_one_targeted[which(  is.na(minus_one_targeted) )] <- indx_targeted[1] - 1
+minus_one_targeted <- minus_one_targeted[minus_one_targeted != 0]
+```
+
+Check binning
+```{r, example of minus one selection}
+message('Targeted indexes:\t', paste0(head(indx_targeted, 7), sep = ' ') )
+message('Flanking -1 indexes:\t', paste0(head(minus_one_targeted, 7), sep = ' ') )
+```
+
+Since bins numbered `2647` and `2648` are next to each other, the bin numbered `2646` is selected and there's a `0` for the `2647`. By removing the zeros I remove the consecutive CGI bins.
+
+Check that there's no overlap between the targeted and the flanking regions.
+```{r}
+table(plus_one_targeted %in% indx_targeted)
+table(minus_one_targeted %in% indx_targeted)
+```
+
+Check that some flanking bins can be both upstream or downstream.
+
+```{r}
+table(minus_one_targeted %in% plus_one_targeted)
+```
+
+Create a new bin type valiable
+```{r, assign new GI type}
+all_bins25kb_K27me3$type2  <- NA
+all_bins25kb_K27me3[ indx_targeted, ]$type2 <- "PcG targeted CGI"
+all_bins25kb_K27me3[ plus_one_targeted, ]$type2 <- "PcG targeted CGI + 1"
+all_bins25kb_K27me3[ minus_one_targeted, ]$type2 <- "PcG targeted CGI - 1"
+all_bins25kb_K27me3[ is.na(all_bins25kb_K27me3$type2), ]$type2 <- "Rest of the genome"  
+
+all_bins25kb_K27me3$type2 <- factor(all_bins25kb_K27me3$type2,
+                                   levels = c(
+                                     "PcG targeted CGI", 
+                                     "PcG targeted CGI + 1",
+                                     "PcG targeted CGI - 1",
+                                     "Rest of the genome") )
+table(all_bins25kb_K27me3$type2)
+```
+
+Log10 transform the bins signal.
+```{r, Log10 transform the bins signal}
+all_bins25kb_K27me3 |>
+  column_to_rownames(var = "bin") |>
+  select(chr, start, end, WT, CSex4, dex4, KO, type, type2) |>
+  mutate( across( where(is.double), log10 ) ) |>
+  # arrange is used to favour the CGI point to appear later in the plot and therefore be above the other points.
+  arrange( desc(type2) ) -> log_bins25kb_K27me3
+```
+
+Check total number of bin
+```{r, bin num}
+num_all_bins_2.5kb <- nrow(log_bins25kb_K27me3)
+message("Number of bins of 2.5kb width to plot: ",  num_all_bins_2.5kb)
+```
+
+Individual bin types number
+
+```{r}
+targeted_nBins <- table(log_bins25kb_K27me3$type2)[names(table(log_bins25kb_K27me3$type2))=="PcG targeted CGI"]
+plus_nBins <- table(log_bins25kb_K27me3$type2)[names(table(log_bins25kb_K27me3$type2))=="PcG targeted CGI + 1"]
+minus_nBins <- table(log_bins25kb_K27me3$type2)[names(table(log_bins25kb_K27me3$type2))=="PcG targeted CGI - 1"]
+flanking_nBins <- sum(plus_nBins, minus_nBins)
+ROTG_nBins <- table(log_bins25kb_K27me3$type2)[names(table(log_bins25kb_K27me3$type2))=="Rest of the genome"]
+
+message("Bins containing a targeted CGI: ", targeted_nBins, "\n",
+        "Bins flanking a targeted CGI: ", flanking_nBins, "\n",
+        "Bins in the rest of genome: ", ROTG_nBins)
+```
+
+Fit a linear model between different conditions.
+
+### Scatter plot ∆ex4 vs WT
+
+```{r, linear fit WT vs dex4}
+intercet_wt_dex4 <- coef( lm(log_bins25kb_K27me3$dex4 ~ log_bins25kb_K27me3$WT ) )[1] 
+slope_wt_dex4 <- coef( lm(log_bins25kb_K27me3$dex4 ~ log_bins25kb_K27me3$WT ) )[2] 
+```
+
+If I were to plot all bins signal as a scatter plot of WT vs ∆ex4 I would do something like this:
+```{r, plot all bins wt vs dex4, eval = FALSE, echo = TRUE}
+log_bins25kb_K27me3 |>
+
+  ggplot() +
+  aes(x = WT, y = dex4, colour = type2) +
+  # facet_wrap(~type2, scales = 'fixed') +
+  geom_point(size = 0.75) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_dex4, intercept = intercet_wt_dex4, linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 3.5), ylim = c(0, 3.5) ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "PcG targeted CGI" = '#A2234C',
+                                 "Rest of the genome" = '#72817F') ) +
+  labs(x = "WT H3K27me3 signal (log10)", y = "∆ex4 H3K27me3 signal (log10)" ) +
+  scatter_th -> pBins_WT_vs_dex4_All_Targeted
+
+# do not plot cause it's 2 many points
+pBins_WT_vs_dex4_All_Targeted
+ggsave(path = pdf_dir_fig5,
+       filename = paste0("Fig3C_CGI_coloured_WT_vs_Dex4_bins_n", num_all_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_dex4_All_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.5, height = 4.5)
+```
+
+However that breaks the RStudio graphic engine.
+
+To overcome some of the overplotting I remove points that are identical by `type2` value. If 2 point have the exact same values, the duplicated point is removed from the dataframe. This helps removing points that are going to be plotted on top of each other, making the plot more manageable. This operation requires the use of the dataframe row names.
+
+Start by removing the many "rest of the genome" bins
+```{r, filter rest of genome}
+indx_dups_ROTG_wt_dex4 <-
+  which(duplicated(log_bins25kb_K27me3[log_bins25kb_K27me3$type2 == "Rest of the genome"  , c("WT", "dex4")]))
+row_names_dups_ROTG <- rownames(log_bins25kb_K27me3[indx_dups_ROTG_wt_dex4, ]) 
+wt_dex4_bins <- log_bins25kb_K27me3[!rownames(log_bins25kb_K27me3) %in% row_names_dups_ROTG,]
+```
+
+
+Then removing the "PcG targeted CGI"
+```{r, filter CGI}
+indx_dups_PTC_wt_dex4 <- which(duplicated(wt_dex4_bins[wt_dex4_bins$type2 == "PcG targeted CGI", c("WT", "dex4")] ) )
+row_names_dups_PTC <- rownames(wt_dex4_bins[indx_dups_PTC_wt_dex4, ]) 
+wt_dex4_bins <- wt_dex4_bins[!rownames(wt_dex4_bins) %in% row_names_dups_PTC,]
+```
+
+Lastly the +1 and -1 bins
+
+```{r, filter flanking bins}
+indx_dups_P1M1_wt_dex4 <- which(duplicated(wt_dex4_bins[wt_dex4_bins$type2 %in% c("PcG targeted CGI + 1", "PcG targeted CGI + 1"), c("WT", "dex4")] ) )
+row_names_dups_P1M1 <- rownames(wt_dex4_bins[indx_dups_P1M1_wt_dex4, ]) 
+wt_dex4_bins <- wt_dex4_bins[!rownames(wt_dex4_bins) %in% row_names_dups_P1M1,]
+```
+
+Re-calcualte bin numbers now after filtering
+
+```{r, re-get number of bin}
+num_fltrd_bins_2.5kb <- nrow(wt_dex4_bins)
+message("Number of bins of 2.5kb width to plot: ",  num_fltrd_bins_2.5kb)
+```
+
+```{r, plot filtered scatter plot dex4}
+ggplot(wt_dex4_bins) +
+  aes(x = WT, y = dex4, colour = type2) +
+  # facet_wrap(~type2, scales = 'fixed') +
+  geom_point(size = 0.75, alpha = 0.5, stroke = 0) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_dex4, intercept = intercet_wt_dex4, linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 3.5), ylim = c(0, 3.5), clip = 'on' ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI" = '#A2234C',
+                                 "PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "Rest of the genome" = '#72817F'), 
+                      breaks = c("PcG targeted CGI", 
+                                 "PcG targeted CGI + 1",
+                                 "Rest of the genome"),
+                      labels = c("PcG targeted CGI" = "Targeted", 
+                                  "PcG targeted CGI + 1" = "Flanking",
+                                 "Rest of the genome" = "Rest of genome") ) +
+  labs(x = "Spike-in normalised WT H3K27me3 signal (log10)", 
+       y = "Spike-in normalised ∆ex4 H3K27me3 signal (log10)" ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 0.99))) +
+  scatter_th -> pBins_WT_vs_dex4_Filtered_Targeted
+```
+
+Save to pdf.
+
+```{r}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig3B_CGI_coloured_WT_vs_Dex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_dex4_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+::: {.callout-note}
+The scatter plot contains too many points to be efficiently plotted. For an effective scatter plot visualisation I rasterise only the specific points layer of the `ggplot2` plot and keep all other labels and text in vector format.
+:::
+
+```{r, rasterise dex4}
+rBins_WT_vs_dex4_Filtered_Targeted <- rasterize(pBins_WT_vs_dex4_Filtered_Targeted, layers = 'Point', dpi = 400)
+```
+
+```{r, fig.width = 2, fig.height = 2}
+rBins_WT_vs_dex4_Filtered_Targeted
+```
+Save to pdf.
+```{r, save raterised dex4}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig3C_RASTERIZED_CGI_coloured_WT_vs_Dex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = rBins_WT_vs_dex4_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+
+### Scatter plot CSex4 vs WT
+
+Get linear fit.
+```{r, linear fit WT vs CSex4}
+intercet_wt_CSex4 <- coef( lm(log_bins25kb_K27me3$CSex4 ~ log_bins25kb_K27me3$WT ) )[1] 
+slope_wt_CSex4 <- coef( lm(log_bins25kb_K27me3$CSex4 ~ log_bins25kb_K27me3$WT ) )[2] 
+```
+
+Filter the bins like before.
+Start by removing the many "rest of the genome" bins
+
+```{r, filter CSex4 RotG }
+indx_dups_ROTG_wt_CSex4 <- which(duplicated(log_bins25kb_K27me3[log_bins25kb_K27me3$type2 == "Rest of the genome", c("WT", "CSex4")]))
+row_names_dups_ROTG <- rownames(log_bins25kb_K27me3[indx_dups_ROTG_wt_CSex4, ]) 
+wt_CSex4_bins <- log_bins25kb_K27me3[!rownames(log_bins25kb_K27me3) %in% row_names_dups_ROTG,]
+```
+
+Filter the "PcG targeted CGI" in CSex4 vs WT dataset
+```{r, filter CSex4 CGI}
+indx_dups_PTC_wt_CSex4 <- which(duplicated(wt_CSex4_bins[wt_CSex4_bins$type2 == "PcG targeted CGI", c("WT", "CSex4")] ) )
+row_names_dups_PTC <- rownames(wt_CSex4_bins[indx_dups_PTC_wt_CSex4, ]) 
+wt_CSex4_bins <- wt_CSex4_bins[!rownames(wt_CSex4_bins) %in% row_names_dups_PTC,]
+```
+
+And the +1 and -1 bins
+```{r, filter CSex4 flanking bins}
+indx_dups_P1M1_wt_dex4 <- which(duplicated(wt_CSex4_bins[wt_CSex4_bins$type2 %in% c("PcG targeted CGI + 1", "PcG targeted CGI + 1"), c("WT", "CSex4")] ) )
+row_names_dups_P1M1 <- rownames(wt_CSex4_bins[indx_dups_P1M1_wt_dex4, ]) 
+wt_CSex4_bins <- wt_CSex4_bins[!rownames(wt_CSex4_bins) %in% row_names_dups_P1M1,]
+```
+
+Check number of bins after filtering
+```{r, get CSex4 bins}
+num_fltrd_bins_2.5kb <- nrow(wt_CSex4_bins)
+message("Number of bins of 2.5kb width to plot: ", num_fltrd_bins_2.5kb)
+```
+Basically this filtering removes duplicated points.
+
+```{r, plot filtered scatter plot CSex4 vs WT}
+ggplot(wt_CSex4_bins) +
+  aes(x = WT, y = CSex4, colour = type2) +
+  geom_point(size = 0.75, alpha = 0.5, stroke = 0) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_CSex4, intercept = intercet_wt_CSex4, linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 3.5), ylim = c(0, 3.5), clip = 'on' ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI" = '#A2234C',
+                                 "PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "Rest of the genome" = '#72817F'), 
+                      breaks = c("PcG targeted CGI", 
+                                 "PcG targeted CGI + 1",
+                                 "Rest of the genome"),
+                      labels = c("PcG targeted CGI" = "Targeted", 
+                                 "PcG targeted CGI + 1" = "Flanking",
+                                 "Rest of the genome" = "Rest of genome") ) +
+  labs(x = "Spike-in normalised WT H3K27me3 signal (log10)", 
+       y = "Spike-in normalised CSex4 H3K27me3 signal (log10)" ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 0.99))) +
+  scatter_th -> pBins_WT_vs_CSex4_Filtered_Targeted
+```
+
+Save to pdf vector.
+
+```{r, save CSex4 vs WT scatterplot vector}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("Fig3B_CGI_coloured_WT_vs_CSex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_CSex4_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Rasterise only the point layer of ggplot
+
+```{r, rasterise CSex4 vs WT scatterplot}
+rBins_WT_vs_CSex4_Filtered_Targeted <- rasterize(pBins_WT_vs_CSex4_Filtered_Targeted, layers = 'Point', dpi = 400)
+```
+
+Show plot as presented in figure.
+
+```{r, fig.width = 2, fig.height = 2}
+rBins_WT_vs_CSex4_Filtered_Targeted
+```
+
+Save to pdf rasterised scatter plot.
+
+```{r, save CSex4 vs WT scatterplot rasterised}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("Fig3E_RASTERIZED_CGI_coloured_WT_vs_CSex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = rBins_WT_vs_CSex4_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+# Supplementary Figure Panels
+
+# Amniota Testes H3K27me3 re-analysis
+
+
+End analysis.
+
+# Session Info {#sec-sessioninfo}
+
+```{r, print session info}
+sessioninfo::session_info()
+```
