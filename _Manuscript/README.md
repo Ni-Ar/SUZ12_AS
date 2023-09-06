@@ -1,18 +1,18 @@
+# Pre-Print LaTeX code
+
 Move to directory
 
 ```shell
-cd ~/OneDrive\ -\ CRG\ -\ Centre\ de\ Regulacio\ Genomica/Suz12_AS_project/_Manuscript/SUZ12_AS_Manuscript_2
+cd ~/OneDrive\ -\ CRG\ -\ Centre\ de\ Regulacio\ Genomica/Suz12_AS_project/_Manuscript/03_bioRxiv
 ```
 
-This did not work
+Compile the paper on OverLeaf.com and download the pdf.
 
-```shell
-pandoc Article.tex --citeproc --bibliography SUZ12_AS_References.bib --csl zHenriquesLab-StyleBioRxiv.cls -o Formatted_converted.docx
-```
-
-
+If conversion from LaTeX to world document is needed one can try from the `Article.tex` 
 
 ```shell
 pandoc Article.tex --bibliography SUZ12_AS_References.bib -o Formatted_converted.docx
 ```
+
+with mixed results.
 

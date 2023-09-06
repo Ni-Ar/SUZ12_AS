@@ -26,6 +26,8 @@ _Figures/plots*
 _Figures/various*
 
 # Old analysis code
+_Code/Fig5/pdf*
+_Code/Fig5/tables*
 _Code/PreRevision_Analysis*
 
 # All slides
@@ -36,3 +38,11 @@ _Slides/*
 1*
 2*
 3*
+
+
+## Never commit
+
+_Manuscript/01_*
+_Manuscript/02_*
+_Manuscript/03_bioRxiv/*.xlsx
+_Manuscript/notes_*.txt
