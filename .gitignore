@@ -37,12 +37,10 @@ _Slides/*
 0*
 1*
 2*
-3*
-
 
 ## Never commit
 
-_Manuscript/01_*
-_Manuscript/02_*
-_Manuscript/03_bioRxiv/*.xlsx
+#_Manuscript/01_*
+#_Manuscript/02_*
 _Manuscript/notes_*.txt
+_Manuscript/bioRxiv/*.xlsx
