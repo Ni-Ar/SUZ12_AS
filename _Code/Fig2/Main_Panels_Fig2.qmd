@@ -83,13 +83,15 @@ library(ggplot2)
 library(ggrepel)
 library(ggsignif)
 library(viridis, quietly = T)
+library(patchwork)
 library(plotly)
-library(SummarizedExperiment)
-library(Biostrings)
-library(MSnbase)
-library(UniprotR)
-library(DEP)
+library(SummarizedExperiment) # BiocManager::install("SummarizedExperiment")
+library(Biostrings) # BiocManager::install("Biostrings")
+library(MSnbase) # BiocManager::install("MSnbase")
+library(UniprotR) # BiocManager::install("UniprotR")
+library(DEP) # BiocManager::install("DEP")
 library(knitr)
+library(UpSetR)
 
 options(dplyr.summarise.inform = F)
 ```
@@ -529,7 +531,7 @@ left_join(framents_area_sum, Common_Precursor, by = "Sample_Type" ) |>
 
 Plot Figure 2D.
 
-```{r,fig.height = 2, fig.width = 2.5}
+```{r, plot figure 2D, fig.height = 2, fig.width = 2.5}
 ggplot(PRM_areas)+
   aes(x = Sample_Type, y = Norm_Area, fill = Peptide) +
   facet_wrap(~Peptide, scale = "free_y") +
@@ -665,7 +667,7 @@ PRC2_prot_wt_dEx4 |>
 
 Use Suz12 has a normalising factor.
 
-```{r}
+```{r, normalise using SUZ12 length}
 Su12_spec <- subset(spec_counts, ProteinName == "Suz12")
 colnames(Su12_spec)[colnames(Su12_spec) == "Norm_Spec"] <- "Bait_Norm_Spec"
 Su12_spec |> 
@@ -675,7 +677,7 @@ Su12_spec |>
 
 Calculate the stoichiometry ratio relative to Suz12
 
-```{r}
+```{r, calculate stoichiometry}
 spec_counts |>
   full_join(Suz12_spec[, c("Sample", "Mean_Spec")], by = "Sample") |>
   group_by(Sample) |>
@@ -688,7 +690,7 @@ spec_counts |>
 
 Group proteins by PRC2 core or subgroup and calculate *p*-values with `t.test()`. Remove the embryonic Aebp2 isoform (`Q9Z248-3`) with very very low PSMs from this plot for sake of simplicity.
 
-```{r prepare for plot, warning = F, message = F}
+```{r, prepare for plot of stoichiometry ratio, warning = F, message = F}
 PRC2_data <- subset(spec_ratio, ProteinName %in% PRC2)
 PRC2_data <- subset(spec_ratio, UniProtID != "Q9Z248-3")
 
@@ -743,7 +745,7 @@ PRC2_data |>
 
 Plot figure 2F
 
-```{r plot figure 2F, warning = F, message = F, fig.width = 3.6, fig.height = 1.8}
+```{r, plot figure 2F, warning = F, message = F, fig.width = 3.6, fig.height = 1.8}
 ggplot(PRC2_data) +
   aes(x = ProteinName, y = Ratio, fill = Condition) +
   facet_grid(~ Complex, scales = "free", space = 'free_x') +
@@ -1135,6 +1137,7 @@ assay(data_imp_mixed) |>
   relocate(ID, .after = name) -> res_WT_Dexon4
 ```
 
+Check the PSMs of 2 proteins: EZH1 and KMT2B.
 ```{r, echo=FALSE, eval=F}
 assay(dep) |>
   as.data.frame() |>
@@ -1536,7 +1539,7 @@ Here I also try to impute missing values in a tailor made fashion, using a mixed
 
 Here I consider a protein to have missing values **NOT** at random (MNAR) if it has missing values in all replicates of Suz12 KO condition or if the sum of the filtered, not-normalised PSMs across replicates is less than 1. Meaning if a protein is detected as `NA`, `NA`, and `1` in 3 biological replicates of Suz12 KO, the missing values to be set to the `minumum` value in the range (i.e. \~ -3).
 
-```{r, advanced missing value imputation}
+```{r, advanced missing value imputation dataset 2}
 get_df_long(data_filt) |>
   group_by(name, condition) |>
   summarize(Sum_PSMs = sum(intensity, na.rm = T), .groups = 'keep' ) |>
@@ -1561,7 +1564,7 @@ data_imp_mixed <- DEP::impute(data_norm,
 
 Plot the protein intensity distribution of the original dataset with lots of missing values, the filtered, the normalised one, and the 3 different type of data imputation methods.
 
-```{r, fig.height = 12, fig.width = 7}
+```{r, show impotation dataset 2, fig.height = 12, fig.width = 7}
 plot_imputation(data_se, data_filt, data_imp_mle, data_imp_knn, data_imp_mixed) +
   scale_colour_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
   theme(axis.text = element_text(color = 'black'),
@@ -1573,7 +1576,7 @@ plot_imputation(data_se, data_filt, data_imp_mle, data_imp_knn, data_imp_mixed) 
 
 One can see how there's a zero-inflation for Suz12 KO intensities in the mixed model.
 
-```{r, fig.height = 10, fig.width = 6, message = F, warning=FALSE}
+```{r, show normalisation dataset 2, fig.height = 10, fig.width = 6, message = F, warning=FALSE}
 plot_normalization(data_norm, data_imp_knn, data_imp_mixed) +
   scale_fill_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
   theme(axis.text = element_text(color = 'black'),
@@ -1584,7 +1587,7 @@ plot_normalization(data_norm, data_imp_knn, data_imp_mixed) +
 
 Do a dimensionality reduction just to check that the imputation still preserves good sample relationships.
 
-```{r warning=FALSE, message=FALSE}
+```{r, show PCA dataset 2, warning=FALSE, message=FALSE}
 plot_pca(data_imp_mixed, x = 1, y = 2, n = 500, point_size = 4) +
   scale_colour_manual(values = c("KOrS" = "darkorange1", "KOrL" = "mediumpurple3", "KO" = "gray84")) +
   theme(plot.background = element_blank(), 
@@ -1606,7 +1609,7 @@ The methods I tested are:
 
 For this comparison only I use a significant threshold of `0.05` and \|1.5\| log2 Fold change.
 
-```{r, warning=FALSE, message = F, warning = F}
+```{r, get differentially enriched proteins dataset 2, warning = FALSE, message = F}
 # DE analysis on no, MinProb, man, knn, and MLE imputations
 no_imputation_res <- DE_analysis_KOrL_KOrS(data_norm)
 minprob_imputation_res <- DE_analysis_KOrL_KOrS(data_imp_min)
@@ -1619,7 +1622,7 @@ mix_imputation_res <- DE_analysis_KOrL_KOrS(data_imp_mixed)
 
 Check how many differential enriched proteins there are in each dataset
 
-```{r}
+```{r, show number of significant proteins in dataset 2}
 # Number of significant proteins
 objects <- c("no_imputation_res", "minprob_imputation_res", 
              "man_imputation_res", "knn_imputation_res", 
@@ -1720,14 +1723,34 @@ data_imp_mixed |>
   labs(title = 'KO+S vs KO+L')
 ```
 
-Consider significant everything with an FDR \<= 0.05 and a log2 fold change more than 1.25.
+Consider significant everything with an FDR \<= 0.05 and a log2 fold change more than 1.25. Use KO+L as control in the contrast between KO+S vs KO+L. 
 
-```{r, set significance threshold in rescue IP-MS}
+```{r, set significance threshold in rescue IP-MS vs KOrL}
 data_imp_mixed |>
   test_diff(type = "control", control = "KOrL") |>
   add_rejections(alpha = 0.05, lfc = log2(1.25)) |>
-  get_results() -> data_results
+  get_results() |>
+  select(name, ID, starts_with('KOrS_')) -> data_results_LvsS
+```
 
+Get the results when using KO as control
+
+```{r, set significance threshold in rescue IP-MS vs KO}
+data_imp_mixed |>
+  test_diff(type = "control", control = "KO") |>
+  add_rejections(alpha = 0.05, lfc = log2(1.25)) |>
+  get_results() |>
+  select(name, ID, starts_with('KOrS_'), starts_with('KOrL_'), KO_centered ) -> data_results_LnSvsKO
+```
+
+Combine both results
+```{r,  combine results}
+data_results <- full_join(data_results_LvsS, data_results_LnSvsKO, 
+                          by = join_by(name, ID, KOrS_centered))
+```
+
+Remove hits that are significant in KO.
+```{r, remove KO significant hits}
 # remove KO hits
 data_results <- subset(data_results, ! ID %in% KO_hits)
 ```
@@ -1747,7 +1770,7 @@ data_results |>
 
 Select proteins to label and set fill colour for Aebp2 and Jarid2
 
-```{r}
+```{r, get labels ready for volcano plot of rescues}
 prot_to_label <- c("Aebp2", "Jarid2", "Stag2", "Dhb12", "Phf11", "Rpb4", "Rprd2",
                    "Chm2a", "Nsun5", "Zn296", "Ari5b", "Ezhip")
 
@@ -1843,7 +1866,7 @@ ggplotly(p_interactive_Volcano, tooltip = "text")
 
 Add Mean PSMs
 
-```{r Calcualte mean PSM in rescue dataset}
+```{r, Calcualte mean PSM in rescue dataset}
 assay(data_imp_mixed) |>
   as.data.frame() |>
   rownames_to_column("name") |>
@@ -1868,7 +1891,7 @@ assay(data_imp_mixed) |>
 
 Define proteins to label in the MA plot
 
-```{r}
+```{r, set proteins to label in MA}
 prot_to_label_MA <- c(PRC2, PRC2.1, PRC2.2, "Stag2", "Phf11", "Rprd2", "Addg",
                       "Chm2a", "Nsun5", "Zn296", "Anxa6", "Ezhip", "Eloc", "H4",
                       "Epop", "Elob", "Dyhc1", "Myo1e",  "Brd2", "Gptch4", 
@@ -1943,9 +1966,184 @@ I also made an interactive MA plot if one is interested in exploring more the pr
 ggplotly(p_interactive_MA)
 ```
 
-### Export results to table
+## Check overlap between SUZ12-IP and FLAG-IP
 
-Export for Supplementary table
+Check how many proteins are in each IP-MS experiments and how many are shared or unique to each experiment. 
+For this analysis I use the protein "UniProtID" (column name `ID`) as the identifier. One could also change the `$ID` to `$name` to a more human readable protein identifiers.
+
+```{r, print all num proteins idenfied}
+message(length(res_WT_Dexon4$ID), '\tproteins idenfied with SUZ12 IP-MS')
+message(length(res_KO_rescues$ID), '\tproteins idenfied with FLAG IP-MS')
+```
+
+Make a list of all identified proteins for the upset plot
+
+```{r, make list of all proteins for upset plot}
+all_identified_proteins <- list(res_WT_Dexon4$ID, res_KO_rescues$ID)
+names(all_identified_proteins) <- c('All SUZ12 IP',  'All FLAG IP')
+```
+
+Make an UpSet plot to show the intersection betweenn all proteins in the SUZ12 and FLAG IP.
+```{r, make upset plot intersection all proteins identified}
+prot_intersection <- upset(fromList(all_identified_proteins),
+                      text.scale = 1.5, nintersects = NA, 
+                      mb.ratio = c(0.65, 0.35), decreasing = c(T, F),
+                      order.by = 'freq',
+                      main.bar.color = "gray16") 
+```
+
+Show intersection between SUZ12 and FLAG IPs.
+
+```{r, show_upset_plot_all, fig.width = 5.5, fig.height = 4.5}
+prot_intersection
+```
+
+Save this upset plot to pdf.
+
+```{r, save upset plot all interactions, message = FALSE, warning = FALSE}
+cairo_pdf(file = file.path(pdf_dir_fig2, 'Rev1_p2_intersection_all_proteins_IPs.pdf'), 
+          width = 4, height = 4, bg = NA)
+prot_intersection
+dev.off()
+```
+
+Save this upset plot jpeg.
+```{r, save upset plot all interactions as jpeg, message = FALSE, warning = FALSE}
+jpeg(file = file.path(pdf_dir_fig2, 'Rev1_p2_intersection_all_proteins_IPs.jpeg'), 
+     width = 4, height = 4, units = "in", res = 150)
+prot_intersection
+dev.off()
+```
+
+Create a dataframe with the shared proteins and unique proteins to each IP. This is later on saved to a csv file.
+
+```{r, make a dataframe with overlaps}
+suz12_flag <- intersect(res_WT_Dexon4$ID, res_KO_rescues$ID)
+suz12_specific <- res_WT_Dexon4$ID[!res_WT_Dexon4$ID %in% suz12_flag]
+flag_specific <- res_KO_rescues$ID[!res_KO_rescues$ID %in% suz12_flag]
+
+# pad with NAs smaller intersection
+if( length(flag_specific) > length(suz12_specific) ) {
+  length(suz12_specific) <- length(flag_specific)  
+  length(suz12_flag) <- length(flag_specific) 
+}
+
+all_prot_intersection <- data.frame(SUZ12_isect_FLAG = suz12_flag,
+                                    SUZ12_specific = suz12_specific,
+                                    FLAG_specific = flag_specific) 
+```
+
+Set thresholds for defining "enriched" proteins.
+
+```{r, set enrichment thresholds}
+ratio_thrshld <- 1
+pval_thshld <- 0.1
+```
+
+Identify "enriched proteins" by having |ratio| >= `r ratio_thrshld` and *P*-value =< `r pval_thshld` (lose stringency).
+
+```{r, print num proteins idenfied}
+wt_enriched <- subset(res_WT_Dexon4, Dexon4_vs_WT_ratio <= -ratio_thrshld &
+                          Dexon4_vs_WT_p.val <= pval_thshld )$ID
+
+dex4_enriched <- subset(res_WT_Dexon4, Dexon4_vs_WT_ratio >= ratio_thrshld &
+                          Dexon4_vs_WT_p.val <= pval_thshld )$ID
+
+KOrL_enriched <- subset(res_KO_rescues, KOrS_vs_KOrL_ratio <= -ratio_thrshld &
+                          KOrS_vs_KOrL_p.val <= pval_thshld )$ID
+
+KOrS_enriched <- subset(res_KO_rescues, KOrS_vs_KOrL_ratio >= ratio_thrshld &
+                          KOrS_vs_KOrL_p.val <= pval_thshld )$ID
+
+message(length(wt_enriched), '\tproteins enriched in WT vs ∆ex4 (SUZ12 IP-MS)')
+message(length(dex4_enriched), '\tproteins enriched in ∆ex4 vs WT (SUZ12 IP-MS)')
+message(length(KOrL_enriched), '\tproteins enriched in KO+L vs KO+S (FLAG IP-MS)')
+message(length(KOrS_enriched), '\tproteins enriched in KO+S vs KO+L (FLAG IP-MS)')
+```
+
+Make a list of for the upset plot of enriched proteins
+
+```{r, make list for upset plot of enriched proteins}
+identified_proteins <- list(wt_enriched, dex4_enriched, 
+                            KOrL_enriched, KOrS_enriched)
+names(identified_proteins) <- c('WT enriched',  '∆ex4 enriched',
+                                'KO+L enriched', 'KO+S enriched')
+```
+
+Make an UpSet plot
+
+```{r, make upset plot enriched proteins}
+prot_overlap <- upset(fromList(identified_proteins), nsets = length(identified_proteins),
+                      text.scale = 1.5, nintersects = NA, 
+                      mb.ratio = c(0.65, 0.35), decreasing = c(T, F),
+                      order.by = 'freq',
+                      main.bar.color = "gray16") 
+```
+
+Show overlap.
+
+```{r, show_upset_plot_enriched_proteins, fig.width = 5.5, fig.height = 4.5}
+prot_overlap
+```
+
+Save this upset plot to pdf.
+
+```{r, save upset plot enriched proteins intersections as pdf, message = FALSE, warning = FALSE}
+cairo_pdf(file = file.path(pdf_dir_fig2, 'Rev1_p2_overlap_enriched_proteins_IPs.pdf'), 
+          width = 6, height = 4, bg = NA)
+prot_overlap
+dev.off()
+```
+
+Save this upset plot jpeg.
+```{r, save upset plot enriched proteins intersections as jpeg, message = FALSE, warning = FALSE}
+jpeg(file = file.path(pdf_dir_fig2, 'Rev1_p2_overlap_enriched_proteins_IPs.jpeg'), 
+          width = 6, height = 4, units = "in", res = 150)
+prot_overlap
+dev.off()
+```
+
+Check the proteins between each overlap.
+
+```{r, make a dataframe with overlaps of enriched proteins}
+wt_koL <- intersect(wt_enriched, KOrL_enriched)
+wt_koS <- intersect(wt_enriched, KOrS_enriched)
+dex_koL <- intersect(dex4_enriched, KOrL_enriched)
+dex_koS <- intersect(dex4_enriched, KOrS_enriched)
+
+# pad with NAs smaller intersection
+if( length(wt_koL) > length(dex_koL) ) {
+  length(wt_koS) <- length(wt_koL)  
+  length(dex_koL) <- length(wt_koL) 
+  length(dex_koS) <- length(wt_koL) 
+} else if ( length(wt_koL) < length(dex_koL) ) {
+  length(wt_koS) <- length(dex_koL)  
+  length(wt_koL) <- length(dex_koL) 
+  length(dex_koS) <- length(dex_koL) 
+} else if (length(wt_koL) == length(dex_koL) ) {
+  length(wt_koS) <- length(dex_koL)   
+  length(dex_koS) <- length(dex_koL) 
+} else {
+  stop("I'm having issues with vector lengths")
+}
+
+intersections <- data.frame(WT_isect_KOrL = wt_koL, 
+                            WT_isect_KOrS = wt_koS,
+                            dex4_isect_KOrL = dex_koL, 
+                            dex4_isect_KOrS = dex_koS) 
+```
+
+Print summary of enriched proteins overlap.
+
+```{r, pretty print overlap}
+#| tbl-cap: "Overlap of significant proteins between SUZ12-IP and FLAG-IP"
+#| tbl-colwidths: [60,40]
+kable(intersections)
+```
+
+## Export results to table
+
+Export for supplementary table the results dataframes
 
 ```{r merge results tables}
 res_WT_Dexon4 <- select(res_WT_Dexon4, -c("Dexon4_centered","WT_centered", "significant") )
@@ -1959,6 +2157,22 @@ colnames(res_KO_rescues) <- gsub("KOrS_vs_KOrL", "KO+S_vs_KO+L", colnames(res_KO
 
 write_excel_csv(x = res_KO_rescues, file = file.path(tbl_dir_fig2, 'KO-L_vs_KO-S_res.csv'),
                 col_names = T, quote = "all")
+```
+
+Export the intersection between the 2 IPs.
+
+```{r, export isect all prot}
+write_excel_csv2(x = all_prot_intersection, 
+                 file = file.path(tbl_dir_fig2, 'SUZ12_FLAG_IPs_all_proteins_intersection_UniProtID.xls'),
+                 na = "NA", append = F, col_names = T, delim = ";", quote = "all", eol = "\n")
+```
+
+Export overlap dataframe of enriched proteins. 
+
+```{r, export overlap dataframe}
+write_excel_csv2(x = intersections, 
+                 file = file.path(tbl_dir_fig2, 'SUZ12_FLAG_IPs_enriched_proteins_overlaps_UniProtID.xls'),
+                 na = "NA", append = F, col_names = T, delim = ";", quote = "all", eol = "\n")
 ```
 
 ## Targeted proteomic identification of SUZ12-S peptide
@@ -2147,7 +2361,7 @@ Plot EZH2 exon 4 coverage
 
 ```{r, Plot_WT_Dex_EZH2_exon_4_peptide_coverage, fig.width = 6, fig.height = 1.8}
 plot_pep_cov(df_res = df_ezh2_ex4_wt, AA_exon_start = 83, AA_exon_end = 121) +
-  labs(title = 'EZH2 exon 4') -> p_EZH2_ex4_cov
+  labs(title = 'EZH2 exon 4 (SUZ12-IP)') -> p_EZH2_ex4_cov
 p_EZH2_ex4_cov
 ```
 Only part of the exon is covered but we can't claim major differences in peptides abunance.
@@ -2178,7 +2392,7 @@ read_saint_peps(saint_path = saint_path_WT_dEx4,
 Plot EZH2 exon 14 from the same dataset.
 ```{r, Plot_WT_Dex_EZH2_exon_14_peptide_coverage, fig.width = 6, fig.height = 1.8}
 plot_pep_cov(df_res = df_ezh2_ex14_wt, AA_exon_start = 516, AA_exon_end = 558) +
-  labs(title = 'EZH2 exon 14') -> p_EZH2_ex14_cov
+  labs(title = 'EZH2 exon 14 (SUZ12-IP)') -> p_EZH2_ex14_cov
 p_EZH2_ex14_cov
 ```
 
@@ -2193,7 +2407,7 @@ ggsave(filename = "Rev3_EZH2ex14_WT_Dex4_IP_Peptides_Coverage.pdf",
 Do the same kind of plots for the FLAG IP of the KO rescues.
 
 ```{r, echo = F, eval = TRUE}
-rm(df_ezh2_ex4_wt, p_EZH2_ex4_cov, df_ezh2_ex14_wt, p_EZH2_ex14_cov)
+rm(df_ezh2_ex4_wt, df_ezh2_ex14_wt)
 ```
 
 #### KO rescues flag-IP
@@ -2280,8 +2494,8 @@ Plot coverage
 
 ```{r, Plot Flag rescues  EZH2 exon 4 peptide coverage, fig.width = 6.5, fig.height = 1.8}
 plot_pep_cov(df_res = df_ezh2_ex4_flag, AA_exon_start = 83, AA_exon_end = 121) +
-  labs(title = 'EZH2 exon 4') -> p_EZH2_ex4_cov
-p_EZH2_ex4_cov
+  labs(title = 'EZH2 exon 4 (FLAG-IP)') -> p_EZH2_ex4_cov_flag
+p_EZH2_ex4_cov_flag
 ```
 
 Not peptides could be mapped to exon 4 of EZH2 as it can also be checked with:
@@ -2293,7 +2507,7 @@ Save to pdf.
 
 ```{r, Save Flag rescues  EZH2 exon 4 peptide coverage}
 ggsave(filename = "Rev3_EZH2ex4_KO_Rescues_IP_Peptides_Coverage.pdf", 
-       plot = p_EZH2_ex4_cov, device = cairo_pdf, path = pdf_dir_fig2, 
+       plot = p_EZH2_ex4_cov_flag, device = cairo_pdf, path = pdf_dir_fig2, 
        width = 16.5, height = 3.5, units = "cm")
 ```
 
@@ -2325,17 +2539,17 @@ read_saint_peps(saint_path = saint_path_KO_Rescues,
 
 Plot.
 
-```{r, Flag rescues EZH2 exon 14 peptide coverage, message = F, fig.width = 6.5, fig.height = 1.8}
+```{r, Save flag rescues EZH2 exon 14 peptide coverage, message = F, fig.width = 6.5, fig.height = 1.8}
 plot_pep_cov(df_res = df_ezh2_ex14_flag, AA_exon_start = 516, AA_exon_end = 558) +
-  labs(title = 'EZH2 exon 14') -> p_EZH2_ex14_cov
-p_EZH2_ex14_cov
+  labs(title = 'EZH2 exon 14 (FLAG-IP)') -> p_EZH2_ex14_cov_flag
+p_EZH2_ex14_cov_flag
 ```
 
 Save to pdf
 
 ```{r, Save Flag rescues EZH2 exon 14 peptide coverage}
 ggsave(filename = "Rev3_EZH2ex14_KO_Rescues_IP_Peptides_Coverage.pdf", 
-       plot = p_EZH2_ex14_cov, device = cairo_pdf, path = pdf_dir_fig2, 
+       plot = p_EZH2_ex14_cov_flag, device = cairo_pdf, path = pdf_dir_fig2, 
        width = 16.5, height = 3.5, units = "cm")
 ```
 
@@ -2344,6 +2558,24 @@ ggsave(filename = "Rev3_EZH2ex14_KO_Rescues_IP_Peptides_Coverage.pdf",
 
 Due to MS limitations it is very difficult if not impossible to detect different AS from a label free IP-MS experiment. In the case of SUZ12-S peptide we performed a targeted MS protocol. A Precise Reaction Monitoring (PRM) method was used to acquire the data where we selected only 3 specific SUZ12 peptides for further fragmentation.
 :::
+
+
+```{r, save all peptides coverage plots into 1 file}
+all_ezh2_cov <- wrap_plots(p_EZH2_ex4_cov, p_EZH2_ex14_cov, 
+                           p_EZH2_ex4_cov_flag, p_EZH2_ex14_cov_flag, 
+                           ncol = 1, nrow = 4)
+```
+
+```{r, fig.width = 8, fig.height = 8}
+all_ezh2_cov
+```
+
+Save to jpeg
+```{r, save to jpeg}
+ggsave(filename = "Rev3_EZH2ex4-14_SUZ12_FLAG_IP_Peptides_Coverage.jpeg", 
+       plot = all_ezh2_cov, device = 'jpeg', path = pdf_dir_fig2, 
+       width = 16.5, height = 14, units = "cm", dpi = 300)
+```
 
 I could check other AS exons in PRC2 but for now I want to stop here.
 
