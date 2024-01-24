@@ -55,13 +55,14 @@ library(Cairo)
 ```
 
 The package `extrafont` is require for the 'cdot' symbol (`%.%`) to be shown when displaying *P*-values.
+
 ```{r, load extrafonts, warning = FALSE, message = FALSE}
 library(extrafont) 
 # extrafont::font_import() # do it only once
 loadfonts(quiet = T)
 ```
 
-To efficiently read in R pdb files  I use the function `bio3d::read.pdb()`, that I installed without all its dependencies.
+To efficiently read in R pdb files I use the function `bio3d::read.pdb()`, that I installed without all its dependencies.
 
 ```{r, load bio3d}
 # install.packages("bio3d", dependencies = FALSE)
@@ -98,7 +99,7 @@ theme_bw(base_family = 'Arial', base_size = 6) +
         strip.background = element_blank(),
         strip.text.y = element_text(vjust = 0, hjust = 0.5, margin = margin(l = 0, unit = 'mm')),
         plot.background = element_blank(),
-        plot.margin = margin(t = , b = 0, l = 0, r = 0, unit = 'mm')
+        plot.margin = margin(t = 0, b = 0, l = 0, r = 0, unit = 'mm')
         ) -> gradients_theme
 
 theme_classic(base_family = 'Arial', base_size = 5) +
@@ -289,6 +290,7 @@ The quantification where done beforehand using the raw tiff files and measuring 
 ## Gradient fractionation WB quantification plot
 
 ### WT and ∆ex4 samples: PRC2.1 & PRC2.2 proteins
+
 This analysis plots the quantification from the first biological replicates pair.
 
 ```{r, read different excel sheets}
@@ -334,7 +336,8 @@ ggplot(data = fractionation_wb) +
   facet_grid(rows = vars(Protein) ) +
   geom_line(linewidth = 0.25, linetype = 'solid') +
   geom_point(aes(fill = line), size = 0.5, shape = 21, stroke = 0.5) +
-  scale_x_continuous(breaks = seq(2, 24, 2), limits = c(2, 24), expand = expansion(add = 0.5, mult = 0) ) +
+  scale_x_continuous(breaks = seq(2, 24, 2), limits = c(2, 24),
+                     expand = expansion(add = 0.5, mult = 0) ) +
   scale_y_continuous(breaks = c(0, 0.5, 1), expand = expansion(add = c(0, 0.1), mult = 0) ) +
   scale_color_manual(values = c('WT' = "#377AA3", '∆ex4' = "#F7CB48") ) +
   scale_fill_manual(values = c('WT' = "#377AA3", '∆ex4' = "#F7CB48") ) +
@@ -371,6 +374,7 @@ ggsave(filename = "Fig3C_Gradient_WT_Dex4_ZOOMED_Line.pdf", path = pdf_dir_fig3,
 ```
 
 ### KO rescue samples: flag-tagged SUZ12
+
 Plot rescues.
 
 ```{r, prepare rescue results}
@@ -456,13 +460,13 @@ Use a for loop to calculate the distances between all 5 different pdf files. The
 
 5.  Performes a two-sided, paired, Wilcoxon rank rum significance test (`wilcox_test`) between the residue distances distributions in each pdb file and calculate Cohen's effect size d (`cohens_d`).
 
-6.  Plots the distances as boxplots for each prediction and saves it to a pdf file.
+6.  Plots the distances as boxplots for each prediction ~~and saves it to a pdf file~~.
 
-7. Populates 2 list with the results for the distances and *P*-values.
+7.  Populates 2 list with the results for the distances and *P*-values.
 
-8. Cleans up and restart the loop.
+8.  Cleans up and restart the loop.
 
-```{r, for loop to calcualte distances, message = TRUE, warning = FALSE}
+```{r, for loop to calcualte distances to RBBP4 residues, message = TRUE, warning = FALSE}
 pdb_rank <- c(1:5)
 list_df <- list()
 list_p_anno <- list()
@@ -581,10 +585,10 @@ for (p in 1:length(pdb_rank)) {
          y = "Distance SUZ12 R196 to RBBP4 acidic pocket (Å)") +
     coord_cartesian(clip = 'off') + colabfold_distances_theme -> p_BoxPlot_Dists
     
-  ggsave(filename = paste0("CF_SUZ12_RBBP4_Dist_rank", pdb_rank[p], ".pdf"),
-         bg = NULL, plot = p_BoxPlot_Dists, device = cairo_pdf,
-         symbolfamily = "Helvetica", pointsize = 5, path = pdf_dir_fig3,
-         width = 3, height = 6.5, units = "cm")
+  # ggsave(filename = paste0("CF_SUZ12_RBBP4_Dist_rank", pdb_rank[p], ".pdf"),
+  #        bg = NULL, plot = p_BoxPlot_Dists, device = cairo_pdf,
+  #        symbolfamily = "Helvetica", pointsize = 5, path = pdf_dir_fig3,
+  #        width = 3, height = 6.5, units = "cm")
 
   # -- 7 -- Populate list ----
   list_df[[p]] <- dist_df
@@ -599,6 +603,7 @@ for (p in 1:length(pdb_rank)) {
 ```
 
 Merge list of dataframe into 1 single dataframe and prepare for plotting.
+
 ```{r, combine the list of dataframes}
 dist_df_5_pdbs <- do.call('rbind', list_df)
 p_anno_df_5_pdbs <- do.call('rbind', list_p_anno)
@@ -610,7 +615,7 @@ dist_df_5_pdbs |>
   left_join(p_anno_df_5_pdbs, by = "model_rank") -> p_anno_df_5_pdbs
 ```
 
-Plot all distances for each ranked model as boxplot
+Make a plot with all distances to RBBP4 negatively charged residues for each of the 5 ranked model as boxplot
 
 ```{r, plot all distances, fig.width = 4, fig.height = 2, warning = FALSE, message = FALSE}
 ggplot(dist_df_5_pdbs) +
@@ -630,8 +635,7 @@ ggplot(dist_df_5_pdbs) +
   scale_fill_manual(values = c('SUZ12-S' = '#f07e19', 'SUZ12-L' = '#7b67ab')) +
   labs(y = "Distance SUZ12 R196 to RBBP4 acidic pocket (Å)") +
   coord_cartesian(clip = 'off') +
-  colabfold_distances_theme  -> p_BoxPlot_AllModels_SUZ12_RKR_RBBP4_Dist
-p_BoxPlot_AllModels_SUZ12_RKR_RBBP4_Dist
+  colabfold_distances_theme -> p_BoxPlot_AllModels_SUZ12_RKR_RBBP4_Dist
 ```
 
 Save all models to pdf.
@@ -643,7 +647,7 @@ ggsave(filename = paste0("CF_SUZ12_RBBP4_EuclDist_rank1-", length(pdb_rank), ".p
        width = 3*length(pdb_rank)+2, height = 6.5, units = "cm")  
 ```
 
-Save a figure with only the first best model, where best means lower pLDDT.
+Make a figure with only the first best model, where best means lower pLDDT.
 
 ```{r, best model figure 3F, fig.width = 1, fig.height = 2, warning = FALSE, message = FALSE}
 subset(dist_df_5_pdbs, model_rank == 1) |>
@@ -674,6 +678,229 @@ Save figure 3F
 ggsave(filename = "Fig3F_SUZ12_RBBP4_EuclDist_rank1_Boxplot.pdf", 
        plot = p_BestModel_All_Dists,  path = pdf_dir_fig3, 
        device = cairo_pdf, #symbolfamily = "Helvetica", pointsize = 5,
+       width = 2.0, height = 4.10, units = "cm")  
+```
+
+I also calculate the distance between the SUZ12 ZnB residues important for AEBP2 and JARID2 interaction used generate PRC2.1 only forming cells with the artificial introduction of an A2J2mut1 reported previously [@Youmans2021].
+
+```{r, ZnB residues}
+ZnB_residue_num <- c(95:106)
+```
+
+Calculate distance for all ranked models and test for significance.
+
+```{r, ZnB distance calculation, warning = F}
+pdb_rank <- c(1:5)
+list_df <- list()
+list_p_anno <- list()
+for (p in 1:length(pdb_rank)) {
+  
+  # -- 1 -- Import each PRB by rank order ----
+  inc_rnk_path <- list.files(PRC2_ex4_inclusion_dir, 
+                             pattern = paste0("_relaxed_rank_00", pdb_rank[p], "_"),
+                             full.names = T)
+  
+  exc_rnk_path <- list.files(PRC2_ex4_exclusion_dir, 
+                             pattern = paste0("_relaxed_rank_00", pdb_rank[p], "_"),
+                             full.names = T)
+  # Import PDBs in R
+  pdb_inc <- read.pdb(file = inc_rnk_path)
+  pdb_exc <- read.pdb(file = exc_rnk_path)
+  
+  # -- 2 -- Extract coordinates  ----
+  ## extract PDB coordinates of SUZ12 Arg196 region Calpha coordinate
+  group1_coord_inc <- pdb2coord_df(pdb = pdb_inc, chain_letter = 'B',
+                                   residue_num = SUZ12_residue_num, 
+                                   atom_type = 'CA')
+  
+  # extract PDB coordinates of Arg 196 -23 exon for the SUZ12-S
+  group1_coord_exc <- pdb2coord_df(pdb = pdb_exc, chain_letter = 'B',
+                                   residue_num = SUZ12_residue_num - 23, 
+                                   atom_type = 'CA')
+  
+  ## extract PDB coordinates of the SUZ12 ZnB domain
+  # inclusion PDB
+  group2_coord_inc <- pdb2coord_df(pdb = pdb_inc, 
+                                   residue_num = ZnB_residue_num, 
+                                   chain_letter = 'B', atom_type = 'CA')
+  
+  # exclusion PDB
+  group2_coord_exc <- pdb2coord_df(pdb = pdb_exc, 
+                                   residue_num = ZnB_residue_num, 
+                                   chain_letter = 'B', atom_type = 'CA')
+  
+  stopifnot(nrow(group2_coord_inc) == nrow(group2_coord_exc))
+
+  coord_inc <- rbind(group1_coord_inc, group2_coord_inc)
+  coord_exc <- rbind(group1_coord_exc, group2_coord_exc)
+  
+  # -- 3 -- Calculate euclidean distance  ----  
+  coord_inc |>
+    calculate_residues_pairs_distances() |>
+    left_join(coord_inc, by = join_by(resno) ) |>
+    select( !c(x, y, z) )|>
+    # subset( resno != to_resno ) |>
+    mutate(structure = 'SUZ12-L') -> dist_inc
+  
+  coord_exc |>
+    calculate_residues_pairs_distances() |>
+    left_join(coord_exc, by = join_by(resno) ) |>
+    select( !c(x, y, z) )|>
+    # subset( resno != to_resno ) |>
+    mutate(structure = 'SUZ12-S') -> dist_exc
+  
+  # -- 4 -- Merge inclusion and exclusion data ----
+  dist_df <- rbind(dist_inc, dist_exc) |>
+    # add model
+    mutate(model_rank = pdb_rank[p] ) |>
+    # coerc to interger residue numbers
+    mutate(resno = as.integer(resno),
+           to_resno = as.integer(to_resno)) |>
+    # remove self-distance
+    subset(resno != to_resno) |>
+    # remove coordiantes
+    select(!c(xyz, to_xyz) ) |>
+    # from residue is in SUZ12
+    subset(resno %in% c(SUZ12_residue_num - 23, SUZ12_residue_num) ) |>
+    # to residue is not in SUZ12
+    subset(!to_resno %in% c(SUZ12_residue_num - 23, SUZ12_residue_num) ) |>
+    # Add residue distance pair column
+    # add 23 to the short to create a matching pair
+    mutate(AA_pair = case_when(structure == 'SUZ12-L' ~ paste0(resno, "-", to_resno),
+                               structure == 'SUZ12-S' ~ paste0(resno + 23, "-", to_resno) ) )
+   # -- 5 -- Significance test ----
+  # Calculate p-values and format them for a figure in ggplot
+  dist_df |>
+    wilcox_test(dist ~ structure, ref.group = "SUZ12-L",
+                alternative = 'two.sided', p.adjust.method = 'none', paired = T ) |>
+    mutate(p = signif(p, 1)) |>
+    mutate(p_signif = case_when(p < 2.2e-16 ~ paste0("list(~italic(p)", "<2.2%.%10^-16", ")" ),
+                                between(p, left = 2.2e-16, right = 0.05) ~ paste0("list(~italic(p)==", p, ")" ),
+                                p >= 0.05 ~ 'list(~italic(N.S.))') ) |>
+    mutate(p_signif = gsub("e-", "%.%10^", p_signif)) |>
+    select(group1, group2, n1, n2, p, p_signif) -> p_anno_df
+   
+  # # and effect size
+  dist_df |>
+    cohens_d(dist ~ structure, var.equal = T, ref.group = "SUZ12-L", paired = T) |>
+    select(group1, group2, effsize, magnitude) |>
+    mutate(effsize =  paste0("list(~d==", signif(effsize, 2) ,")") ) |>
+    left_join(x = p_anno_df, by = c("group1", "group2") ) |>
+    mutate(signig_label = paste0( gsub(")$", "", p_signif), gsub("^list\\(", "", effsize) ) ) |>
+    relocate(signig_label, .after = group2) -> p_anno_df
+  p_anno_df$model_rank <- pdb_rank[p]
+  
+  # -- 6 -- Plot ----
+  ggplot(dist_df) +
+    aes(x = structure, y = dist, fill = structure) +
+    geom_boxplot(show.legend = F, linewidth = 0.15, outlier.shape = NA) +
+    geom_point(size = 0.5, show.legend = F, position = position_quasirandom(width = 0.05)) +
+    geom_line( aes(group = AA_pair), linewidth = 0.15, colour = 'blue', linetype = 'dashed') +
+    scale_fill_manual(values = c('SUZ12-S' = '#f07e19', 'SUZ12-L' = '#7b67ab')) +
+    geom_signif(comparisons = list( c("SUZ12-L", "SUZ12-S")),
+                parse = T, annotations = p_anno_df$signig_label,
+                textsize = 2, family = "Arial", lwd = 0.2, vjust = 0.2,
+                tip_length = 0.02)  +
+    scale_y_continuous(limits = c(0, NA),
+                       expand = expansion(add = c(0, 2), mult = 0),
+                       n.breaks = 8) +
+    labs(title = paste0('CF pdb rank #', pdb_rank[p]),
+         y = "Distance SUZ12 R196 to ZnB domain (Å)") +
+    coord_cartesian(clip = 'off') + colabfold_distances_theme -> p_BoxPlot_Dists
+    
+  # ggsave(filename = paste0("CF_SUZ12_ZnB_Dist_rank", pdb_rank[p], ".pdf"),
+  #        bg = NULL, plot = p_BoxPlot_Dists, device = cairo_pdf,
+  #        symbolfamily = "Helvetica", pointsize = 5, path = pdf_dir_fig3,
+  #        width = 3, height = 6.5, units = "cm")
+
+  # -- 7 -- Populate list ----
+  list_df[[p]] <- dist_df
+  list_p_anno[[p]] <- p_anno_df
+  
+  # -- 8 -- Clean up, end of loop  ----
+  rm(dist_df, 
+     # p_anno_df, 
+     group1_coord_inc, group2_coord_inc, group1_coord_exc, group2_coord_exc, coord_inc, coord_exc, dist_inc, dist_exc,
+     pdb_inc, pdb_exc, inc_rnk_path, exc_rnk_path) 
+}
+```
+
+Merge list of dataframe into 1 single dataframe and prepare for plotting.
+
+```{r, combine the list of dataframes for Arg196 and ZnB}
+dist_df_5_pdbs <- do.call('rbind', list_df)
+p_anno_df_5_pdbs <- do.call('rbind', list_p_anno)
+
+# Add max Y axis position based on longest distance
+dist_df_5_pdbs |>
+  group_by(model_rank) |>
+  summarise(max_dist = max(dist)) |>
+  left_join(p_anno_df_5_pdbs, by = "model_rank") -> p_anno_df_5_pdbs
+```
+
+Make a plot with all distances to ZnB domain for each of the 5 ranked model as boxplot
+
+```{r, plot all distances of SUZ12 Arg196 and ZnB residues, fig.width = 4, fig.height = 2, warning = FALSE, message = FALSE}
+ggplot(dist_df_5_pdbs) +
+  aes(x = structure, y = dist, fill = structure) +
+  facet_wrap(~model_rank, nrow = 1)+
+  geom_boxplot(show.legend = F, linewidth = 0.15, outlier.shape = NA) +
+  geom_point(size = 0.5, show.legend = F, position = position_quasirandom(width = 0.05)) +
+  geom_line(aes(group = AA_pair), linewidth = 0.15, linetype = 'dashed', colour = 'blue') +
+  geom_signif(data = p_anno_df_5_pdbs, manual = TRUE, inherit.aes = F, parse = T,
+              aes(xmin = group1, xmax = group2, annotations = signig_label,
+                  y_position = max_dist + 2 ),
+              textsize = 2, family = "Arial", lwd = 0.2, vjust = 0.2,
+              tip_length = 0.02)  +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(add = c(0, 2), mult = 0),
+                     n.breaks = 8) +
+  scale_fill_manual(values = c('SUZ12-S' = '#f07e19', 'SUZ12-L' = '#7b67ab')) +
+  labs(y = "Distance SUZ12 R196 to ZnB domain (Å)") +
+  coord_cartesian(clip = 'off') +
+  colabfold_distances_theme -> p_BoxPlot_AllModels_SUZ12_RKR_ZnB_Dist
+```
+
+Save all models to pdf.
+
+```{r, save all models ZnB}
+ggsave(filename = paste0("CF_SUZ12_ZnB_EuclDist_rank1-", length(pdb_rank), ".pdf"), 
+       plot = p_BoxPlot_AllModels_SUZ12_RKR_ZnB_Dist, 
+       device = cairo_pdf, symbolfamily = "Helvetica", pointsize = 5, path = pdf_dir_fig3, 
+       width = 3*length(pdb_rank)+2, height = 6.5, units = "cm")  
+```
+
+Make a figure with only the first best model, where best means lower pLDDT.
+
+```{r, best model figure S3F, fig.width = 1, fig.height = 2, warning = FALSE, message = FALSE}
+subset(dist_df_5_pdbs, model_rank == 1) |>
+  ggplot() +
+  aes(x = structure, y = dist, fill = structure) +
+  geom_boxplot(show.legend = F, linewidth = 0.15, outlier.shape = NA) +
+  geom_point(size = 0.4, show.legend = F, position = position_quasirandom(width = 0.05)) +
+  geom_line(aes(group = AA_pair), linewidth = 0.1, linetype = 'dashed', colour = 'black') +
+  geom_signif(data = subset(p_anno_df_5_pdbs, model_rank == 1),
+              manual = TRUE, inherit.aes = F, parse = T,
+              aes(xmin = group1, xmax = group2, annotations = signig_label,
+                  y_position = max_dist + 2 ),
+              textsize = 1, family = "Arial", lwd = 0.2, vjust = 0.2,
+              tip_length = 0.02)  +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(add = c(0, 2), mult = 0),
+                     n.breaks = 8) +
+  scale_fill_manual(values = c('SUZ12-S' = '#f07e19', 'SUZ12-L' = '#7b67ab')) +
+  labs(y = "Distance SUZ12 R196 to ZnB domain (Å)") +
+  coord_cartesian(clip = 'off') +
+  colabfold_distances_theme -> p_BestModel_All_Dists
+p_BestModel_All_Dists
+```
+
+Save figure S3F
+
+```{r, save figure S3F}
+ggsave(filename = "FigS3F_SUZ12_ZnB_EuclDist_rank1_Boxplot.pdf", 
+       plot = p_BestModel_All_Dists,  path = pdf_dir_fig3, 
+       device = cairo_pdf,
        width = 2.0, height = 4.10, units = "cm")  
 ```
 
@@ -738,7 +965,7 @@ ggsave(filename = "FigS3E_Gradient_WT_Dex4_Line.pdf", path = pdf_dir_fig3,
        width = 5.15, height = 5)
 ```
 
-Combine both biological replicates into one plot.
+Combine both biological replicates into one plot in case someone wants it.
 
 ```{r, plot fractionation WB combined biol reps, fig.width = 2.05, fig.height = 2}
 rbind(fractionation_wb, fractionation_wb2) |>
