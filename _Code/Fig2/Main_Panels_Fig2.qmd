@@ -20,7 +20,11 @@ Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
 
 # Intro
 
-Using the `proteomicslfq` nextflow [@DiTommaso2017] pipeline I processed the thermo raw files I received from the [CRG/UPF proteomics facility](https://www.crg.eu/en/programmes-groups/crgupf-proteomics-unit) and calculate the peptide spectral matches (PSMs) against a protein database I build from Mouse UniProt (version 2022_03 3~th~ Aug 2022) using both canonical and alternative isoforms as well as common contaminants.
+```{r, empty, eval = FALSE, echo = FALSE}
+# this is just to have r chunks inserted with 
+```
+
+Using the `proteomicslfq` nextflow [@DiTommaso2017] pipeline I processed the thermo raw files I received from the [CRG/UPF proteomics facility](https://www.crg.eu/en/programmes-groups/crgupf-proteomics-unit) and calculate the peptide spectral matches (PSMs) against a protein database I build from Mouse UniProt (version 2022_03 3~th~ Aug 2022) using both canonical and alternative proteoforms as well as common contaminants.
 
 The pipeline was run as following on the CRG cluster.
 
@@ -347,9 +351,9 @@ plot_pep_cov <- function(df_res, AA_exon_start, AA_exon_end, Param_plot = 'Area'
     subset(Value > 0 ) |>
     ggplot()  + 
     aes(x = start, xend = end, y = Sample_Name, yend = Sample_Name, color = Value) +
-    geom_segment(size = 1.5) +
-    geom_vline(xintercept = AA_exon_start, size = 0.2) +
-    geom_vline(xintercept = AA_exon_end, size = 0.2) +
+    geom_segment(linewidth = 1.5) +
+    geom_vline(xintercept = AA_exon_start, linewidth = 0.2) +
+    geom_vline(xintercept = AA_exon_end, linewidth = 0.2) +
     labs(x = "Amino acids position", y = "") +
     scale_x_continuous(expand = expansion(add = 0.1), 
                        n.breaks = 10, breaks = waiver(), 
@@ -463,8 +467,10 @@ Resce_KO_Metada_path <- list.files(tbl_dir_fig2,
 Saint output file paths
 
 ```{r, set up directories paths MS data}
-saint_path_WT_dEx4 <- file.path(tbl_dir_fig2, "Suz12_IP-MS_mESCs_WT_vs_dExon4_Saint.xlsx")
-saint_path_KO_Rescues <- file.path(tbl_dir_fig2, "Suz12_IP-MS_mESCs_Suz12KO_vs_Rescues_Saint.xlsx")
+saint_path_WT_dEx4 <- file.path(tbl_dir_fig2, 
+                                "Suz12_IP-MS_mESCs_WT_vs_dExon4_Saint.xlsx")
+saint_path_KO_Rescues <- file.path(tbl_dir_fig2,
+                                   "Suz12_IP-MS_mESCs_Suz12KO_vs_Rescues_Saint.xlsx")
 stopifnot(file.exists(saint_path_WT_dEx4))
 stopifnot(file.exists(saint_path_KO_Rescues))
 ```
@@ -575,6 +581,8 @@ Here I analyse 2 datasets. First a Suz12 IP in mESCs of WT and ∆exon4 cell lin
 ### Import PSMs from mzTab file
 
 From the `proteomicslfq` pipeline the important mzTAB file and do some tidying up of the data.
+
+This mzTAB file was deposited on PRIDE under the accession code [PXD046660](https://www.ebi.ac.uk/pride/archive/projects/PXD046660).
 
 ```{r, import data from WT and dExon4 IP}
 prot_WT_Dex4 <- readMzTabData(file = WT_Dex4_mzTAB_path, what = "PRT", version = "1.0")
@@ -1236,6 +1244,8 @@ rm(tidy_prot_wt_dEx4, PRC2_data, signif_df, spec_counts, spec_ratio, PRC2_prot_w
 Now perform the same analysis but on the other dataset.
 
 ### Import PSMs from mzTab file for the rescue dataset
+
+The mzTAB file (generate with the `proteomicslfq` pipeline) was deposited on PRIDE under the accession code [PXD046660](https://www.ebi.ac.uk/pride/archive/projects/PXD046660).
 
 ```{r, import data rescue experiment}
 prot_Res_KO <- readMzTabData(file = Resce_KO_mzTAB_path, what = "PRT", version = "1.0")
@@ -2202,7 +2212,7 @@ Glimpse into the targeted proteomics data
 kable( slice_head(tidy_PRM) )
 ```
 
-Plot supplementary figure 1E.
+Plot figure S1E.
 
 ```{r, plot figure, fig.width = 1.8, fig.height = 1.1 }
 ggplot(tidy_PRM) +
@@ -2240,7 +2250,7 @@ ggplot(tidy_PRM) +
 p_spectra
 ```
 
-Save to pdf.
+Save to pdf the m/z spectra.
 
 ```{r, save spectra skipping peptide}
 ggsave(filename = "FigS2E_SUZ12_Short_Peptide_Spectra.pdf", plot = p_spectra,
@@ -2293,11 +2303,6 @@ suz12_pep_cov <- read_saint_peps(saint_path = saint_path_WT_dEx4,
                                  UniProtID = Suz12_UniProt_ID, 
                                  AA_exon_start = 129, AA_exon_end = 153,
                                  eoi_name = 'exon4')
-
-# jarid2_pep_cov <- read_saint_peps(saint_path = saint_path_WT_dEx4, 
-#                                  UniProtID = Jarid2_UniProt_ID, 
-#                                  AA_exon_start = 1, AA_exon_end = 2,
-#                                  eoi_name = 'exon4')
 ```
 
 Check peptide counts in SUZ12 exon 4
@@ -2343,6 +2348,8 @@ To address reviewer #3 comment #2 I check the peptides coverage for in 2 other P
 
 -   [EZH2 exon 4](https://vastdb.crg.eu/event/HsaEX0023625@hg38).
 
+-   [EZH2 exon 14](https://vastdb.crg.eu/event/HsaEX0023622@hg38)
+
 ```{r, Get_WT_Dex_EZH2_exon_4_peptide_coverage}
 read_saint_peps(saint_path = saint_path_WT_dEx4, 
                 UniProtID = 'Q61188', 
@@ -2351,7 +2358,8 @@ read_saint_peps(saint_path = saint_path_WT_dEx4,
   cov2res_peptides() |>
   mutate(Sample_Name = case_when(Sample == "A" ~ "WTp", Sample == "B" ~ "WT#1",
                                  Sample == "C" ~ "WT#2", Sample == "D" ~ "∆EX4#1",
-                                 Sample == "E" ~ "∆EX4#2", Sample == "F" ~ "∆EX4#3"), .before = Sample) |>
+                                 Sample == "E" ~ "∆EX4#2", Sample == "F" ~ "∆EX4#3"), 
+         .before = Sample) |>
   mutate(Sample_Name = factor(Sample_Name, 
                               levels = c("WTp", "WT#1", "WT#2", 
                                          "∆EX4#1", "∆EX4#2", "∆EX4#3"))) -> df_ezh2_ex4_wt
@@ -2364,7 +2372,8 @@ plot_pep_cov(df_res = df_ezh2_ex4_wt, AA_exon_start = 83, AA_exon_end = 121) +
   labs(title = 'EZH2 exon 4 (SUZ12-IP)') -> p_EZH2_ex4_cov
 p_EZH2_ex4_cov
 ```
-Only part of the exon is covered but we can't claim major differences in peptides abunance.
+
+Only part of the exon is covered but we can't claim major differences in peptides abundance.
 
 Save to pdf.
 
@@ -2374,7 +2383,7 @@ ggsave(filename = "Rev3_EZH2ex4_WT_Dex4_IP_Peptides_Coverage.pdf",
        width = 16.5, height = 3.5, units = "cm")
 ```
 
--   [EZH2 exon 14](https://vastdb.crg.eu/event/HsaEX0023622@hg38)
+EZH2 exon 14
 
 ```{r, WT_Dex_EZH2_exon_14_peptide_coverage}
 read_saint_peps(saint_path = saint_path_WT_dEx4, 
@@ -2401,6 +2410,23 @@ Save to pdf
 ```{r, Save WT Dex IP EZH2 exon 14 peptide coverage}
 ggsave(filename = "Rev3_EZH2ex14_WT_Dex4_IP_Peptides_Coverage.pdf", 
        plot = p_EZH2_ex14_cov, device = cairo_pdf, path = pdf_dir_fig2, 
+       width = 16.5, height = 3.5, units = "cm")
+```
+
+Combine both exon annotation into one plot
+
+```{r, Plot_WT_Dex_EZH2_exon_4_14_peptide_coverage, fig.width = 6, fig.height = 1.8}
+plot_pep_cov(df_res = df_ezh2_ex4_wt, AA_exon_start = 83, AA_exon_end = 121) +
+  labs(title = 'EZH2 exon 4 & exon 14 (SUZ12-IP)') + 
+  geom_vline(xintercept = 516) +
+  geom_vline(xintercept = 558) -> p_EZH2_ex4_ex14_cov
+```
+
+Save to pdf.
+
+```{r, Save WT Dex IP EZH2 exon 4 and 14 peptide coverage}
+ggsave(filename = "Rev3_EZH2ex4-14_WT_Dex4_IP_Peptides_Coverage.pdf", 
+       plot = p_EZH2_ex4_ex14_cov, device = cairo_pdf, path = pdf_dir_fig2, 
        width = 16.5, height = 3.5, units = "cm")
 ```
 
@@ -2553,7 +2579,25 @@ ggsave(filename = "Rev3_EZH2ex14_KO_Rescues_IP_Peptides_Coverage.pdf",
        width = 16.5, height = 3.5, units = "cm")
 ```
 
-    
+  
+Combine both exon annotation into one plot
+
+```{r, Plot flag rescues exon 4 14 peptide coverage, fig.width = 6, fig.height = 1.8}
+plot_pep_cov(df_res = df_ezh2_ex14_flag, AA_exon_start = 83, AA_exon_end = 121) +
+  labs(title = 'EZH2 exon 4 & exon 14 (FLAG-IP)') + 
+  geom_vline(xintercept = 516, linewidth = 0.2) +
+  geom_vline(xintercept = 558, linewidth = 0.2) -> p_EZH2_ex4_ex14_cov_flag
+```
+
+Save to pdf.
+
+```{r, Save flag rescues exon 4 14 peptide coverage}
+ggsave(filename = "Rev3_EZH2ex4-14_Rescues_IP_Peptides_Coverage.pdf", 
+       plot = p_EZH2_ex4_ex14_cov_flag, device = cairo_pdf, path = pdf_dir_fig2, 
+       width = 16.5, height = 3.5, units = "cm")
+```
+
+  
 ::: {.callout-warning title="Comments on the identification of AS isoforms peptides with Mass spectrometry"}
 
 Due to MS limitations it is very difficult if not impossible to detect different AS from a label free IP-MS experiment. In the case of SUZ12-S peptide we performed a targeted MS protocol. A Precise Reaction Monitoring (PRM) method was used to acquire the data where we selected only 3 specific SUZ12 peptides for further fragmentation.
@@ -2703,7 +2747,7 @@ ggplot() +
 p_qPCR
 ```
 
-Save to pdf.
+Save to pdf figure S1D.
 
 ```{r, export qPCR plot}
 ggsave(filename = "FigS2D_qPCR_barplot.pdf", plot = p_qPCR, device = cairo_pdf, 
