@@ -34,7 +34,7 @@ which prompts my password and then allows me to navigate the cluster directories
 
 For each sample AS events were quantified using the percentage of sequence inclusion (PSI) metric, which is a number ranging from zero to 100, corresponding to full sequence skipping or full sequence inclusion in all transcripts of a gene, respectively. For example, constitutively spliced exons have a PSI of 100. The PSI cannot be calculated for the very first and last exons of a gene.
 
-These documents reports the downstream AS analysis after processing the samples with VAST-TOOLS[@Tapial2017].
+These documents reports the downstream AS analysis after processing the samples with VAST-TOOLS [@Tapial2017].
 
 ## Quarto
 
@@ -307,7 +307,7 @@ select(tidy_human_psi_tbl, label, ORF, PRC2_Component) |>
 
 ## Plot heatmap
 
-Make Figure 1A
+Make Figure 1A.
 
 ```{r, heatmap human, fig.width = 4.5, fig.height = 3.5}
 tidy_human_psi_tbl |>
@@ -567,7 +567,7 @@ Here's the code and analysis for the panels of supplementary figure 1.
 
 ## Mouse ENCODE data to show panAS profile
 
-Extract and plot *Suz12* exon 4 PSI from the bulk RNA-seq of the ENCODE mouse development project[@He2020].
+Extract and plot *Suz12* exon 4 PSI from the bulk RNA-seq of the ENCODE mouse development project [@He2020].
 
 The functions `get_mouse_tissue_devel_tbl()` and `plot_mouse_tissue_devel()` can be found in my package [niar](https://github.com/Ni-Ar/niar).
 
@@ -584,7 +584,7 @@ ggsave(filename = 'FigS1A_SUZ12_exon4_ENCODE_Mouse_Devel_Bubble.pdf',
 
 ## PSI in single cell datasets
 
-Import the vast-tools analysis of human [@Yan2013] and mouse[@Deng2014] single cell RNA-seq.
+Import the vast-tools analysis of human [@Yan2013] and mouse [@Deng2014] single cell RNA-seq.
 
 ```{r, import human and mouse single cell PSIs}
 Human_EarlyDev_path <- file.path(tbl_dir_fig1, "Human_SUZ12_exon4_PSI_n83_EarlyDev_SingleCells.tab")
@@ -656,7 +656,7 @@ ggsave(filename = "FigS1B_SUZ12_exon4_SingleCell_EarlyDev_Boxplot.pdf",
 
 ## Heatmaps of sequence alignments
 
-Using both manual curation and UCSC 100-way multiple genomes alignment data[@Miller2007], I extracted the genomic coordiantes of SUZ12 exon 4 in 153 vertebrates species. I total I extract 159 as some species (zebrafish, guppy, lyretail-cichlid, turquoise-killifish, medaka) have an extra round of whole genome duplication and there are 2 copies of SUZ12 for which it's hard to decide which is the ohnolog gene. SUZ12 exon 4 is 69 base pairs in all species and with the same intronic/exonic phase.
+Using both manual curation and UCSC 100-way multiple genomes alignment data [@Miller2007], I extracted the genomic coordinates of SUZ12 exon 4 in 153 vertebrates species. I total I extract 159 as some species (zebrafish, guppy, lyretail-cichlid, turquoise-killifish, medaka) have an extra round of whole genome duplication and there are 2 copies of SUZ12 for which it's hard to decide which is the [ohnolog gene](https://en.wikipedia.org/wiki/Sequence_homology#Ohnology). SUZ12 exon 4 is 69 base pairs in all species and with the same intronic/exonic phase.
 
 With the help of my scripts (available at [here](https://github.com/Ni-Ar/msbt)) I download and parse exon 4 sequence and the neighbouring intronic regions for all 153 species programmatically using the UCSC GoldenPath genomes in 2bit format. 
 
@@ -840,14 +840,13 @@ ggsave(filename = "FigS1C_SUZ12_intr3_ex4_int4_Seq_Similarity_Vertebrates_Heatma
        units = "cm", width = 22.9, height = 7.6)
 ```
 
-
 ::: {.callout-caution collapse="true"}
 ## Note
 
 In the future I plan to improve and clean up the code above and turn into an R package. Check the GitHub repo [msbt](https://github.com/Ni-Ar/msbt) for future updates.
 :::
 
-Make also individual pim heatmaps of each region with different minimum percetage value.
+Make also individual pim heatmaps of each region with different minimum percentage value.
 
 Exon 4:
 ```{r, plot only exon 4 region pim, fig.width = 3.2, fig.height = 3}
@@ -985,7 +984,7 @@ ggsave(filename = "FigS1C_SUZ12_in4_Seq_Similarity_Vertebrates_Heatmap.pdf",
 ## Sequence logos
 
 ::: {.callout-note title="Definition" collapse="false"}
-Sequence logos are graphical presentation of patterns in aligned sequences[@Schneider1990], reviewed in [@Wasserman2004]. The specificity of each letter (i.e. nucleotide) at each position of the alignment is measured in bits which is a unit of information content.
+Sequence logos are graphical presentation of patterns in aligned sequences [@Schneider1990], reviewed in [@Wasserman2004]. The specificity of each letter (i.e. nucleotide) at each position of the alignment is measured in bits which is a unit of information content.
 :::
 
 Specify the paths to the fasta files
