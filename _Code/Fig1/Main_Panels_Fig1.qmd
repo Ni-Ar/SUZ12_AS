@@ -20,6 +20,10 @@ Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
 
 # Intro
 
+```{r, empty, eval = FALSE, echo = FALSE}
+# this is just to have r chunks inserted with 
+```
+
 To fetch some of the inclusion tables (PSI data) stored on the CRG cluster I mount the server on my local computer with the following command in the terminal.
 
 ```{bash, crgmnt, eval = F, echo = T}
@@ -50,9 +54,8 @@ library(tidyr)
 library(stringr)
 library(forcats)
 library(ggplot2)
-library(ggsignif)
-library(ggrepel)
 library(ggbeeswarm)
+library(ggrepel)
 library(ggforce)
 library(scales)
 library(viridis, warn.conflicts = F, quietly = T)
@@ -558,74 +561,6 @@ ggsave(filename = "Fig1E_SUZ12_exon4_PSI_in_Vertebrates_Violin.pdf",
        path = pdf_dir_fig1, width = 8.5, height = 4.2, units = "cm")
 ```
 
-## Minigene PSI quantifcations
-
-Import minigene quantifications.
-```{r, import minigene psi}
-quant_file <- file.path(tbl_dir_fig1, 
-                        'Suz12_exon4_minigene_PSI_quantifications.xlsx')
-
-mg_psi <- read_excel(path = quant_file, 
-                     col_types = c("text", "text", "text", "text", "numeric") ) |>
-  mutate(Species = factor(Species, levels = c('Mouse', 'Opossum') ),
-         Exon = factor(Species, levels = c('WT', 'Mutant') ),
-         Sample = factor(Sample, 
-                         levels = c("Mouse_WT", "Mouse_Ancestral",
-                                    "Opossum_WT", "Opossum_Eutherian"))) 
-mg_psi |>
-  group_by(Sample, Species) |>
-  summarise(Mean_PSI = mean(PSI, na.rm = T),
-            Sd_PSI = sd(PSI, na.rm = T),
-            .groups = 'keep') -> stats_mg_psi
-```
-
-Make bar plot for figure 1G.
-```{r, fig1g, fig.width = 3.2, fig.height = 2.5}
-ggplot(mg_psi) +
-  aes(x = Sample, group = Sample, fill = Sample) +
-  geom_col(data = stats_mg_psi, aes(y = Mean_PSI), width = 0.50,
-           colour = 'black', linewidth = 0.1 ) +
-  geom_errorbar(data = stats_mg_psi, 
-                aes(ymin = Mean_PSI - Sd_PSI, ymax = Mean_PSI + Sd_PSI),
-                color = "black", width = 0.2, linewidth = 0.2 ) +
-  geom_quasirandom(aes(y = PSI), stroke = 0.2, size = 1, width = 0.33,
-                   shape = 21, fill = 'white') +
-  geom_signif(comparisons = list( c("Mouse_WT", "Mouse_Ancestral"), 
-                                  c("Opossum_WT", "Opossum_Eutherian") ),
-              aes(y = PSI), test = "wilcox.test", margin_top = 0.1,
-              tip_length = 0.02, size = 0.2, family = 'Arial', vjust = -0.1,
-              textsize = 1.5) +
-  scale_x_discrete(labels = c('Mouse\nWT', 'Mouse\nAncestral Mut.',
-                              'Opossum\nWT', 'Opossum\nPlacental Mut.'),
-                   expand = expansion(mult = c(0.1, 0), add = 0.1)) +
-  scale_y_continuous(breaks = seq(50, 100, 10), 
-                     expand = expansion(mult = c(0, 0.1), add = 0) ) +
-  scale_fill_manual(values = c('dodgerblue', 'darkorchid', 'dodgerblue4', 'darkorchid4') ) +
-  coord_cartesian(ylim = c(50, 100) ) +
-  labs(y = 'PSI') +
-  theme_bw(base_family = 'Arial', base_size = 5) +
-  theme(panel.background = element_blank(),
-        panel.grid.major.y = element_line(linewidth = 0.1),
-        panel.grid.minor = element_blank(),
-        panel.grid.major.x = element_blank(),
-        panel.border = element_blank(),
-        plot.background = element_blank(),
-        axis.text = element_text(colour = 'black'),
-        axis.text.x = element_text(margin = margin(t = -2)),
-        axis.title.x = element_blank(),
-        axis.title.y = element_text(margin = margin(l = -2, r = -1.5)),
-        axis.ticks.x = element_blank(),
-        axis.ticks = element_line(colour = 'black', linewidth = 0.1),
-        axis.ticks.length = unit(x = 1, units = 'mm'),
-        axis.line = element_line(colour = 'black', linewidth = 0.1),
-        legend.position = 'none') -> p_MiniGene
-
-p_MiniGene
-
-ggsave(filename = 'Fig1G_SUZ12_exon4_Minigene_PSI_Quantification_Barplot.pdf',
-       plot = p_MiniGene, path = pdf_dir_fig1, device = cairo_pdf,
-       units = 'cm', width = 3.3, height = 2.75 )
-```
 
 # Supplementary figures
 Here's the code and analysis for the panels of supplementary figure 1.
@@ -1050,7 +985,7 @@ ggsave(filename = "FigS1C_SUZ12_in4_Seq_Similarity_Vertebrates_Heatmap.pdf",
 ## Sequence logos
 
 ::: {.callout-note title="Definition" collapse="false"}
-Sequence logos are graphical presentation of patterns in aligned sequences[@Schneider1990], reviewd in [@Wasserman2004]. The specificity of each letter (i.e. nucleotide) at each position of the alignment is measured in bits which is a unit of information content.
+Sequence logos are graphical presentation of patterns in aligned sequences[@Schneider1990], reviewed in [@Wasserman2004]. The specificity of each letter (i.e. nucleotide) at each position of the alignment is measured in bits which is a unit of information content.
 :::
 
 Specify the paths to the fasta files
@@ -1087,7 +1022,7 @@ marsupials_logo <- plot_bits_logo(df = marsupials, ID_col = 'Species',
                                   y_lims = c(0, 2), uppercase_spacer = 5, 
                                   lowercase_spacer = 3, small_n_correction = T,
                                   ttl_txt = paste0('Marsupialia-Monotremata n = ', num_marsupials_species)) 
-# marsupials_logo
+marsupials_logo
 ```
 
 **Non-mammalian gnathostomata**, a.k.a. non-mammalian vertebrates minus the agnatha (lamprey and hagfish), a.k.a. reptilia (birds and reptiles) plus amphibians plus actinopterygii (boney fish) plus chondrichthyes (sharks and rays).
@@ -1100,7 +1035,7 @@ others_logo <- plot_bits_logo(df = other_vertebrates, ID_col = 'Species',
                               y_lims = c(0, 2), uppercase_spacer = 5, 
                               lowercase_spacer = 3, small_n_correction = T,
                               ttl_txt = paste0('Reptilia-Amphibia-Fish n = ', num_others_species)) 
-# others_logo
+others_logo
 ```
 
 Pile all the logos together for supplementary figure 1D.
@@ -1113,54 +1048,6 @@ all_logos
 ggsave(filename = "FigS1D_SUZ12_ex4_Seq_Logos_Vertebrates.pdf",
        plot = all_logos, device = cairo_pdf, 
        path = pdf_dir_fig1, width = 16.75, height = 7, units = 'cm')
-```
-
-## Jensen-Shannon divergence
-
-To measure how much the nucleotide bits changes at each position between 2 multiple sequence alignments I calculate the Jensen-Shannon divergence (JSD). The idea was inspired by the *DiffLogo* package[@Nettling2015].
-
-Calculate the divergence between placental mammals and non-placental mammals. The positions in which the 2 information contents have a Jensen-Shannon divergence higher than 0.02 are highlighted by grey vertical bars.
-
-```{r, Mammals JSD, fig.width = 8,  fig.height = 1, warning = F, message = F}
-mammals_jsd <- plot_JSD_logo(df1 = eutherians, df2 = marsupials, ID_col = 'Species',
-                             max_JS_div_thrshld = 0.02, uppercase_spacer = 5,
-                             anno_width = 0.6, axis_txt_size = 6,
-                             lowercase_spacer = 3, y_lims = c(-0.5, 0.5),
-                             ttl_txt = 'Eutheria vs Marsupialia-Monotremata')  
-mammals_jsd
-ggsave(filename = "FigS1E_SUZ12_ex4_vsMarsupials_JSD_Logos.pdf",
-       plot = mammals_jsd, device = cairo_pdf, 
-       path = pdf_dir_fig1, width = 16.75, height = 2.25, units = 'cm')
-```
-
-::: {.callout-note}
-In opossum position 3, 19, 48, 58, and 61 the nucleotide is identical to the mouse sequence, so no mutation was performed. And in the paper figure the vertical bars are also remove. Intronic changes are also discarded. 
-:::
-
-Do the same analysis but now combined together the marsupials and other vertebrates sequence. Note how some of the nucleotides with high divergence between placental mammals and marsupials are also present in the comparison between placental mammals and all other jawed vertebrates (gnathostomata).
-
-```{r, Vertebrates JSD, fig.width = 8, fig.height = 1, warning = F, message = F}
-vertebrates_jsd <- plot_JSD_logo(df1 = eutherians, 
-                                 df2 = rbind(marsupials, other_vertebrates),
-                                 ID_col = 'Species', uppercase_spacer = 5,
-                                 lowercase_spacer = 3, 
-                                 y_lims = c(-0.5, 0.5), axis_txt_size = 6,
-                                 ttl_txt = 'Eutheria vs all other vertebrates')  
-vertebrates_jsd
-ggsave(filename = "FigS1E_SUZ12_ex4_vsOthers_JSD_Logos.pdf",
-       plot = vertebrates_jsd, device = cairo_pdf, 
-       path = pdf_dir_fig1, width = 16.75, height = 2.25, units = 'cm')
-```
-
-Combine the JSD logos together for supplementary figure 1E.
-
-```{r, save all JSD logos at once, fig.width = 8, fig.height = 2}
-all_jsd_logos <- wrap_plots(list(mammals_jsd, vertebrates_jsd), ncol = 1, nrow = 2)
-all_jsd_logos
-
-ggsave(filename = "FigS1E_SUZ12_ex4_Seq_JSD_Logos.pdf",
-       plot = all_jsd_logos, device = cairo_pdf, 
-       path = pdf_dir_fig1, width = 16.7, height = 4.5, units = 'cm')
 ```
 
 End of figure 1 and S1 analysis.
