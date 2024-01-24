@@ -3,7 +3,7 @@
 Move to directory
 
 ```shell
-cd ~/OneDrive\ -\ CRG\ -\ Centre\ de\ Regulacio\ Genomica/Suz12_AS_project/_Manuscript/03_bioRxiv
+cd ~/OneDrive\ -\ CRG\ -\ Centre\ de\ Regulacio\ Genomica/Suz12_AS_project/_Manuscript/bioRxiv
 ```
 
 Compile the paper on OverLeaf.com and download the pdf.
