@@ -15,12 +15,14 @@
 .Rhistory
 .Rapp.history
 
-## for initial comit, then after clean up add it
-# Figures
-_Figures/All_Fig_*
-_Figures/Fig*
+## Figure files
+#_Figures/All_Fig_*
+#_Figures/Fig*
+*.ai
+_Figures/All_Fig_PDFs/Merged_Fig*
 _Figures/Supplementary_Fig*
 _Figures/Schemes*
+_Figures/Figure_Model*
 _Figures/Twitter*
 _Figures/plots*
 _Figures/various*
@@ -39,7 +41,6 @@ _Slides/*
 0*
 1*
 2*
-
 
 ## Never commit
 *_Arecco.pdf
