@@ -22,6 +22,18 @@ Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
 
 ChIP-seq analysis.
 
+```{r, empty, eval = FALSE, echo = FALSE}
+# this is just to have r chunks inserted with 
+```
+
+To fetch some of the inclusion tables (PSI data) stored on the CRG cluster I mount the server on my local computer with the following command in the terminal.
+
+```{bash, crgmnt, eval = F, echo = T}
+sshfs narecco@ant-login.linux.crg.es:/users/mirimia ~/mnt
+```
+
+which prompts my password and then allows me to navigate the cluster directories.
+
 # Set Up
 
 General info.
@@ -33,13 +45,21 @@ Load packages required for the analysis and suppress any message. Check the @sec
 ```{r, Loading required packages, warning = T, message = FALSE}
 library(dplyr, warn.conflicts = F, quietly = T)
 library(readr)
+library(readxl)
 library(stringr)
 library(tidyr)
 library(tibble)
 library(ggplot2)
+library(ggforce)
+library(ggsignif)
 library(ggh4x)
-library(ggrastr)
+library(ggrastr) # for rasterizing only the geom_point layer in a plot with many data-points
+library(rstatix)
+library(janitor)
 library(DT)
+library(BioVenn) # Venn Diagram
+library(caroline) # Spie chart
+library(patchwork)
 ```
 
 ## Functions
@@ -81,7 +101,7 @@ theme_classic(base_family = 'Arial', base_size = 6) +
 
 theme_classic(base_family = 'Arial', base_size = 6) +
   theme(axis.text = element_text(colour = 'black'),
-        axis.text.x = element_text(margin = margin(t = -0.4, unit = 'mm') ),
+        axis.text.x = element_text(margin = margin(t = -0.3, unit = 'mm') ),
         axis.ticks.length.y = unit(1, 'mm'),
         axis.ticks = element_line(linewidth = 0.1),
         axis.ticks.x = element_blank(),
@@ -100,15 +120,6 @@ theme_classic(base_family = 'Arial', base_size = 6) +
         plot.background = element_blank() ) -> profile_th
 ```
 
-Helper functions for the  analysis.
-
-Scale from zero to 1.
-```{r, funtions used in this analysis}
-scale01 <- function(x){
-  z <- ( x - min(x) ) / ( max(x) - min(x) )
-  return(z)
-}
-```
 
 Function import GENEprofile files from SeqCode
 
@@ -143,6 +154,11 @@ Path to DropBox folders where Enrique releases the documents.
 ```{r, paths to dropbox}
 dropbox_dir <- file.path('~/Dropbox (CRG ADV)/54_Suz12AS')
 
+round2_h3k27me3_peaks_dir <- file.path(dropbox_dir, 'ROUND2_H3K27me3_ChIP/GENESETS/MACS1')
+stopifnot(dir.exists(round2_h3k27me3_peaks_dir))
+round3_suz12_peaks_dir <- file.path(dropbox_dir, 'ROUND3 - SUZ12 ChIP/files/genesets')
+stopifnot(dir.exists(round3_suz12_peaks_dir))
+
 round17_meta_dir <- file.path(dropbox_dir, 'ROUND17_Figure3/01_files_for_boxplotofmetaplots')
 round17_scatter_dir <- file.path(dropbox_dir, 'ROUND17_Figure3/02_files_for_scattersboxplots')
 stopifnot(dir.exists(round17_meta_dir))
@@ -150,6 +166,10 @@ stopifnot(dir.exists(round17_scatter_dir))
 
 round21_meta_dir <- file.path(dropbox_dir, 'ROUND21_PcGSubUnitChIPseq/METAPLOTS/GENEPLOTS')
 stopifnot(dir.exists(round21_meta_dir))
+round23_scatter_dir <- file.path(dropbox_dir, 'ROUND23_FinalFiguresRevision/SCATTERPLOTS')
+stopifnot(dir.exists(round23_scatter_dir))
+round23_metagene_dir <- file.path(dropbox_dir, 'ROUND23_FinalFiguresRevision/METAPLOTS')
+stopifnot(dir.exists(round23_metagene_dir))
 ```
 
 List all bed files to be used for the metagene profiles
@@ -163,19 +183,13 @@ CGI_Dir <- file.path(oneDrive_Dir, '11_ChIP/Processed_data/Metaplots_CGI')
 stopifnot(dir.exists(CGI_Dir))
 ```
 
-List the path the `deeptools3` `compureMatrix` output.
-```{r, path to matrix output dir}
-mat_dir <- file.path("~/mnt/narecco/projects/07_Suz12AS/data/matrix/Amniota_Testes")
-stopifnot(dir.exists(CGI_Dir))
-```
-
 # Main Figure Panels
 
-## Spike-in normalised H3K27me3 signal in 2.5kb genomic bins
+## Spike-in normalised H3K27me3 signal in 2.5kb genomic bins in endogenous cell lines
 
 Import all 2.5 kb bins of H3K27me3.
 
-```{r, import H3K27me3 bins of 2.5kb bins}
+```{r, import H3K27me3 bins of 2.5kb bins endogenous cell lines}
 all_bins25kb_K27me3 <- read_delim(file = file.path(round17_scatter_dir, 'H3K27me3_R3all_bins_2.5Kb_yes.txt'),
                                   delim = '\t', progress = F,
                                   col_names = c('bin', "WT", 'CSex4', 'dex4', 'KO'),
@@ -216,13 +230,12 @@ all_bins25kb_K27me3 |>
 ```
 
 Set bin type as factor.
-
 ```{r, factorise bins types}
 all_bins25kb_K27me3$type <- factor(all_bins25kb_K27me3$type,
                                    levels = c("PcG targeted CGI", "Other CGI", "Rest of the genome") )
 ```
 
-Overview of bins file
+Overview of bins file.
 ```{r, data table K36}
 datatable(head(all_bins25kb_K27me3, 150), rownames = FALSE, filter = 'top', 
           options = list(pageLength = 5, autoWidth = TRUE) )
@@ -306,7 +319,7 @@ Check that some flanking bins can be both upstream or downstream.
 table(minus_one_targeted %in% plus_one_targeted)
 ```
 
-Create a new bin type valiable
+Create a new bin type variable called `type2`.
 ```{r, assign new GI type}
 all_bins25kb_K27me3$type2  <- NA
 all_bins25kb_K27me3[ indx_targeted, ]$type2 <- "PcG targeted CGI"
@@ -333,15 +346,14 @@ all_bins25kb_K27me3 |>
   arrange( desc(type2) ) -> log_bins25kb_K27me3
 ```
 
-Check total number of bin
-```{r, bin num}
+Check total number of bin.
+```{r, bin num endogenous}
 num_all_bins_2.5kb <- nrow(log_bins25kb_K27me3)
 message("Number of bins of 2.5kb width to plot: ",  num_all_bins_2.5kb)
 ```
 
-Individual bin types number
-
-```{r, check number of bins in each set}
+Individual bin types numbers:
+```{r, check number of bins in each set endogenous lines}
 targeted_nBins <- table(log_bins25kb_K27me3$type2)[names(table(log_bins25kb_K27me3$type2))=="PcG targeted CGI"]
 plus_nBins <- table(log_bins25kb_K27me3$type2)[names(table(log_bins25kb_K27me3$type2))=="PcG targeted CGI + 1"]
 minus_nBins <- table(log_bins25kb_K27me3$type2)[names(table(log_bins25kb_K27me3$type2))=="PcG targeted CGI - 1"]
@@ -353,9 +365,9 @@ message("Bins containing a targeted CGI: ", targeted_nBins, "\n",
         "Bins in the rest of genome: ", ROTG_nBins)
 ```
 
-Fit a linear model between different conditions.
-
 ### Scatter plot ∆ex4 vs WT
+
+Fit a linear model between different conditions.
 
 ```{r, linear fit WT vs dex4}
 intercet_wt_dex4 <- coef( lm(log_bins25kb_K27me3$dex4 ~ log_bins25kb_K27me3$WT ) )[1] 
@@ -365,7 +377,6 @@ slope_wt_dex4 <- coef( lm(log_bins25kb_K27me3$dex4 ~ log_bins25kb_K27me3$WT ) )[
 If I were to plot all bins signal as a scatter plot of WT vs ∆ex4 I would do something like this:
 ```{r, plot all bins wt vs dex4, eval = FALSE, echo = TRUE}
 log_bins25kb_K27me3 |>
-
   ggplot() +
   aes(x = WT, y = dex4, colour = type2) +
   # facet_wrap(~type2, scales = 'fixed') +
@@ -384,9 +395,9 @@ log_bins25kb_K27me3 |>
   scatter_th -> pBins_WT_vs_dex4_All_Targeted
 
 # do not plot cause it's 2 many points
-pBins_WT_vs_dex4_All_Targeted
+# pBins_WT_vs_dex4_All_Targeted
 ggsave(path = pdf_dir_fig5,
-       filename = paste0("Fig3C_CGI_coloured_WT_vs_Dex4_bins_n", num_all_bins_2.5kb, ".pdf"),
+       filename = paste0("Fig5B_CGI_coloured_WT_vs_Dex4_bins_n", num_all_bins_2.5kb, ".pdf"),
        plot = pBins_WT_vs_dex4_All_Targeted, device = cairo_pdf, units = "cm",
        width = 4.5, height = 4.5)
 ```
@@ -403,7 +414,6 @@ row_names_dups_ROTG <- rownames(log_bins25kb_K27me3[indx_dups_ROTG_wt_dex4, ])
 wt_dex4_bins <- log_bins25kb_K27me3[!rownames(log_bins25kb_K27me3) %in% row_names_dups_ROTG,]
 ```
 
-
 Then removing the "PcG targeted CGI"
 ```{r, filter CGI}
 indx_dups_PTC_wt_dex4 <- which(duplicated(wt_dex4_bins[wt_dex4_bins$type2 == "PcG targeted CGI", c("WT", "dex4")] ) )
@@ -419,16 +429,16 @@ row_names_dups_P1M1 <- rownames(wt_dex4_bins[indx_dups_P1M1_wt_dex4, ])
 wt_dex4_bins <- wt_dex4_bins[!rownames(wt_dex4_bins) %in% row_names_dups_P1M1,]
 ```
 
-Re-calcualte bin numbers now after filtering
+Re-calculate bin numbers now after filtering
 
 ```{r, re-get number of bin}
 num_fltrd_bins_2.5kb <- nrow(wt_dex4_bins)
 message("Number of bins of 2.5kb width to plot: ",  num_fltrd_bins_2.5kb)
 ```
 
-Plot figure 3B
+Plot figure 5C.
 
-```{r, plot filtered scatter plot dex4}
+```{r, plot filtered scatter plot dex4 fig 5C}
 ggplot(wt_dex4_bins) +
   aes(x = WT, y = dex4, colour = type2) +
   # facet_wrap(~type2, scales = 'fixed') +
@@ -456,9 +466,9 @@ ggplot(wt_dex4_bins) +
 
 Save to pdf.
 
-```{r, save figure 3B as PDF}
+```{r, save figure 5C as PDF}
 ggsave(path = pdf_dir_fig5, 
-       filename = paste0("Fig3B_CGI_coloured_WT_vs_Dex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       filename = paste0("Fig5C_CGI_coloured_WT_vs_Dex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
        plot = pBins_WT_vs_dex4_Filtered_Targeted, device = cairo_pdf, units = "cm",
        width = 4.2, height = 4.2)
 ```
@@ -471,16 +481,16 @@ The scatter plot contains too many points to be efficiently plotted. For an effe
 rBins_WT_vs_dex4_Filtered_Targeted <- rasterize(pBins_WT_vs_dex4_Filtered_Targeted, layers = 'Point', dpi = 400)
 ```
 
-Plot rasterised scatter plot for figure 3B
-```{r, display figure 3C as rasterised, fig.width = 2, fig.height = 2}
+Plot rasterised scatter plot for figure 5C
+```{r, display figure 5C as rasterised, fig.width = 2, fig.height = 2}
 rBins_WT_vs_dex4_Filtered_Targeted
 ```
 
 Save to pdf.
 
-```{r, save raterised dex4}
+```{r, save raterised dex4 fig 5C}
 ggsave(path = pdf_dir_fig5, 
-       filename = paste0("Fig3C_RASTERIZED_CGI_coloured_WT_vs_Dex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       filename = paste0("Fig5C_RASTERIZED_CGI_coloured_WT_vs_Dex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
        plot = rBins_WT_vs_dex4_Filtered_Targeted, device = cairo_pdf, units = "cm",
        width = 4.2, height = 4.2)
 ```
@@ -511,10 +521,10 @@ row_names_dups_PTC <- rownames(wt_CSex4_bins[indx_dups_PTC_wt_CSex4, ])
 wt_CSex4_bins <- wt_CSex4_bins[!rownames(wt_CSex4_bins) %in% row_names_dups_PTC,]
 ```
 
-And the +1 and -1 bins
+And the +1 and -1 flanking bins
 ```{r, filter CSex4 flanking bins}
-indx_dups_P1M1_wt_dex4 <- which(duplicated(wt_CSex4_bins[wt_CSex4_bins$type2 %in% c("PcG targeted CGI + 1", "PcG targeted CGI + 1"), c("WT", "CSex4")] ) )
-row_names_dups_P1M1 <- rownames(wt_CSex4_bins[indx_dups_P1M1_wt_dex4, ]) 
+indx_dups_P1M1_wt_CSex4 <- which(duplicated(wt_CSex4_bins[wt_CSex4_bins$type2 %in% c("PcG targeted CGI + 1", "PcG targeted CGI + 1"), c("WT", "CSex4")] ) )
+row_names_dups_P1M1 <- rownames(wt_CSex4_bins[indx_dups_P1M1_wt_CSex4, ]) 
 wt_CSex4_bins <- wt_CSex4_bins[!rownames(wt_CSex4_bins) %in% row_names_dups_P1M1,]
 ```
 
@@ -523,8 +533,8 @@ Check number of bins after filtering
 num_fltrd_bins_2.5kb <- nrow(wt_CSex4_bins)
 message("Number of bins of 2.5kb width to plot: ", num_fltrd_bins_2.5kb)
 ```
-Basically this filtering removes duplicated points.
 
+Basically this filtering removes duplicated points.
 ```{r, plot filtered scatter plot CSex4 vs WT}
 ggplot(wt_CSex4_bins) +
   aes(x = WT, y = CSex4, colour = type2) +
@@ -555,7 +565,7 @@ Save to pdf vector.
 
 ```{r, save CSex4 vs WT scatterplot vector}
 ggsave(path = pdf_dir_fig5,  
-       filename = paste0("Fig3B_CGI_coloured_WT_vs_CSex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       filename = paste0("Fig5B_CGI_coloured_WT_vs_CSex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
        plot = pBins_WT_vs_CSex4_Filtered_Targeted, device = cairo_pdf, units = "cm",
        width = 4.2, height = 4.2)
 ```
@@ -566,9 +576,9 @@ Rasterise only the point layer of ggplot
 rBins_WT_vs_CSex4_Filtered_Targeted <- rasterize(pBins_WT_vs_CSex4_Filtered_Targeted, layers = 'Point', dpi = 400)
 ```
 
-Show plot as presented in figure.
+Show plot as presented in figure 5B.
 
-```{r, display rasterised figure 3E, fig.width = 2, fig.height = 2}
+```{r, display rasterised figure 5B, fig.width = 2, fig.height = 2}
 rBins_WT_vs_CSex4_Filtered_Targeted
 ```
 
@@ -576,18 +586,697 @@ Save to pdf rasterised scatter plot.
 
 ```{r, save CSex4 vs WT scatterplot rasterised}
 ggsave(path = pdf_dir_fig5,  
-       filename = paste0("Fig3E_RASTERIZED_CGI_coloured_WT_vs_CSex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       filename = paste0("Fig5B_RASTERIZED_CGI_coloured_WT_vs_CSex4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
        plot = rBins_WT_vs_CSex4_Filtered_Targeted, device = cairo_pdf, units = "cm",
        width = 4.2, height = 4.2)
 ```
 
-### Boxplot H3K27me3 signal in 2.5kb genomic bins
+## Spike-in normalised H3K27me3 signal in 2.5kb genomic bins in KO rescues cell lines
+
+Here I repeat the same analysis but for the SUZ12-KO isoform specific rescue cell lines.
+
+```{r, import rescues}
+all_bins25kb_K27me3_rescues <- read_delim(
+  file = file.path(round23_scatter_dir, 'H3K27me3_R3all--W2-S1-S3-L4-L6-L3D2-S3D2_bins_2.5Kb_yes.txt'),
+                                  delim = ' ', progress = F,
+                                  col_names = c('bin', 'WT', 'CSex4', 'dex4', 'KO',
+                                                'WT2', 'KOrS1', 'KOrS3', 'KOrL4', 'KOrL6', 'KOrL3D2', 'KOrS3D2'),
+                                  show_col_types = FALSE) |>
+  mutate(chr = str_split_fixed(pattern = "\\*", string = bin, n = 3)[,1],
+         start = str_split_fixed(pattern = "\\*", string = bin, n = 3)[,2],
+         end = str_split_fixed(pattern = "\\*", string = bin, n = 3)[,3]) |>
+  relocate(chr, start, end, .after = bin) 
+```
+
+The samples `'WT2', 'KOrS1', 'KOrS3', 'KOrL4', 'KOrL6', 'KOrL3D2', 'KOrS3D2'` were done after in a second round compared to the first round of samples (`'WT', 'CSex4', 'dex4', 'KO'`). 
+
+Check how many bins fall within a SUZ12 CGIs or other CGI
+
+```{r}
+table(all_bins25kb_K27me3_rescues$bin %in% bins25kbK27me3_CGI_SUZ12$bin)
+table(all_bins25kb_K27me3_rescues$bin %in% bins25kbK27me3_other_CGI$bin)
+```
+
+Annotate rescues bins that fall in targeted CGIs.
+
+```{r}
+all_bins25kb_K27me3_rescues |>
+  mutate(type = case_when(bin %in% bins25kbK27me3_CGI_SUZ12$bin ~ "PcG targeted CGI",
+                          bin %in% bins25kbK27me3_other_CGI$bin ~ "Other CGI") ) |>
+  mutate(type = ifelse(is.na(type), yes = "Rest of the genome", no = type )
+  ) -> all_bins25kb_K27me3_rescues
+```
+
+```{r}
+all_bins25kb_K27me3_rescues$type <- factor(all_bins25kb_K27me3_rescues$type,
+                                   levels = c("PcG targeted CGI", "Other CGI", "Rest of the genome") )
+```
+
+Same as before identify the CGI flanking bins.
+
+First the downstream +1 bins.
+
+```{r}
+indx_targeted <- which(all_bins25kb_K27me3_rescues$type == "PcG targeted CGI")
+
+plus_one_targeted <- c()
+for (i in 1:(length(indx_targeted)-1) ) {
+  
+  if ( (indx_targeted[i + 1] - indx_targeted[i]) == 1 ) {
+    # Do no nothing
+    plus_one_targeted[i] <- 0
+    
+  } else {
+    plus_one_targeted[i] <- indx_targeted[i] + 1
+  }
+}
+
+plus_one_targeted <- plus_one_targeted[plus_one_targeted != 0]
+```
+
+Then the upstream -1 bins
+
+```{r}
+minus_one_targeted <- c()
+for (i in 2:(length(indx_targeted)) ) {
+  
+  if ( ( indx_targeted[i] - indx_targeted[i - 1] ) == 1 ) {
+    # Do no nothing
+    minus_one_targeted[i] <- 0
+    
+  } else {
+    minus_one_targeted[i] <- indx_targeted[i] - 1
+  }
+}
+
+minus_one_targeted[which(  is.na(minus_one_targeted) )] <- indx_targeted[1] - 1
+minus_one_targeted <- minus_one_targeted[minus_one_targeted != 0]
+```
+
+Create a new bin type variable called `type2` also for rescue data.
+
+```{r, assign new CGI type in rescues}
+all_bins25kb_K27me3_rescues$type2  <- NA
+all_bins25kb_K27me3_rescues[ indx_targeted, ]$type2 <- "PcG targeted CGI"
+all_bins25kb_K27me3_rescues[ plus_one_targeted, ]$type2 <- "PcG targeted CGI + 1"
+all_bins25kb_K27me3_rescues[ minus_one_targeted, ]$type2 <- "PcG targeted CGI - 1"
+all_bins25kb_K27me3_rescues[ is.na(all_bins25kb_K27me3_rescues$type2), ]$type2 <- "Rest of the genome"  
+
+all_bins25kb_K27me3_rescues$type2 <- factor(all_bins25kb_K27me3_rescues$type2,
+                                    levels = c(
+                                      "PcG targeted CGI", 
+                                      "PcG targeted CGI + 1",
+                                      "PcG targeted CGI - 1",
+                                      "Rest of the genome") )
+table(all_bins25kb_K27me3_rescues$type2)
+```
+
+Log10 transform the bins signal in rescue data.
+```{r, Log10 transform the bins signal in rescues}
+all_bins25kb_K27me3_rescues |>
+  column_to_rownames(var = "bin") |>
+  select(chr, start, end, WT2, KOrS1, KOrS3, KOrL4, KOrL6, KOrL3D2, KOrS3D2, type, type2) |>
+  mutate( across( where(is.double), log10 ) ) |>
+  # arrange is used to favour the CGI point to appear later in the plot and therefore be above the other points.
+  arrange( desc(type2) ) -> log_bins25kb_K27me3_rescue
+```
+
+Check total number of bin in rescues.
+```{r, bin num rescues}
+num_all_bins_2.5kb <- nrow(log_bins25kb_K27me3_rescue)
+message("Number of bins of 2.5kb width to plot: ",  num_all_bins_2.5kb)
+```
+
+Individual bin types numbers in rescues:
+```{r, check number of bins in each set rescues}
+targeted_nBins <- table(log_bins25kb_K27me3_rescue$type2)[names(table(log_bins25kb_K27me3_rescue$type2))=="PcG targeted CGI"]
+plus_nBins <- table(log_bins25kb_K27me3_rescue$type2)[names(table(log_bins25kb_K27me3_rescue$type2))=="PcG targeted CGI + 1"]
+minus_nBins <- table(log_bins25kb_K27me3_rescue$type2)[names(table(log_bins25kb_K27me3_rescue$type2))=="PcG targeted CGI - 1"]
+flanking_nBins <- sum(plus_nBins, minus_nBins)
+ROTG_nBins <- table(log_bins25kb_K27me3_rescue$type2)[names(table(log_bins25kb_K27me3_rescue$type2))=="Rest of the genome"]
+
+message("Bins containing a targeted CGI: ", targeted_nBins, "\n",
+        "Bins flanking a targeted CGI: ", flanking_nBins, "\n",
+        "Bins in the rest of genome: ", ROTG_nBins)
+```
+
+### Scatter plot KO+SUZ12-S vs WT
+
+Fit a linear model between different conditions.
+
+```{r, linear fit WT vs KOrS}
+intercet_wt_KOrS1 <- coef( lm(log_bins25kb_K27me3_rescue$KOrS1 ~ log_bins25kb_K27me3_rescue$WT2 ) )[1] 
+slope_wt_KOrS1 <- coef( lm(log_bins25kb_K27me3_rescue$KOrS1 ~ log_bins25kb_K27me3_rescue$WT2 ) )[2] 
+
+intercet_wt_KOrS3 <- coef( lm(log_bins25kb_K27me3_rescue$KOrS3 ~ log_bins25kb_K27me3_rescue$WT2 ) )[1] 
+slope_wt_KOrS3 <- coef( lm(log_bins25kb_K27me3_rescue$KOrS3 ~ log_bins25kb_K27me3_rescue$WT2 ) )[2] 
+```
+
+To overcome some of the overplotting I remove points that are identical by `type2` value. If 2 point have the exact same values, the duplicated point is removed from the dataframe. 
+
+Start by removing the many "rest of the genome" bins
+```{r, filter rest of genome rescues KOrS1}
+indx_dups_ROTG_wt_KOrS1 <-
+  which(duplicated(log_bins25kb_K27me3_rescue[log_bins25kb_K27me3_rescue$type2 == "Rest of the genome"  , c("WT2", "KOrS1")]))
+row_names_dups_ROTG <- rownames(log_bins25kb_K27me3_rescue[indx_dups_ROTG_wt_KOrS1, ]) 
+wt_KOrS1_bins <- log_bins25kb_K27me3_rescue[!rownames(log_bins25kb_K27me3_rescue) %in% row_names_dups_ROTG,]
+```
+
+Then removing the "PcG targeted CGI"
+```{r, filter CGI rescues KOrS1}
+indx_dups_PTC_wt_KOrS1 <- which(duplicated(wt_KOrS1_bins[wt_KOrS1_bins$type2 == "PcG targeted CGI", c("WT2", "KOrS1")] ) )
+row_names_dups_PTC <- rownames(wt_KOrS1_bins[indx_dups_PTC_wt_KOrS1, ]) 
+wt_KOrS1_bins <- wt_KOrS1_bins[!rownames(wt_KOrS1_bins) %in% row_names_dups_PTC,]
+```
+
+Lastly the +1 and -1 bins
+
+```{r, filter flanking bins KOrS1}
+indx_dups_P1M1_wt_KOrS1 <- which(duplicated(wt_KOrS1_bins[wt_KOrS1_bins$type2 %in% c("PcG targeted CGI + 1", "PcG targeted CGI + 1"), c("WT2", "KOrS1")] ) )
+row_names_dups_P1M1 <- rownames(wt_KOrS1_bins[indx_dups_P1M1_wt_KOrS1, ]) 
+wt_KOrS1_bins <- wt_KOrS1_bins[!rownames(wt_KOrS1_bins) %in% row_names_dups_P1M1,]
+```
+
+Re-calculate bin numbers now after filtering
+
+```{r, re-get number of bin rescues KOrS1}
+num_fltrd_bins_2.5kb <- nrow(wt_KOrS1_bins)
+message("Number of bins of 2.5kb width to plot: ",  num_fltrd_bins_2.5kb)
+```
+
+Plot figure 5E
+
+```{r, plot filtered scatter plot dex4}
+ggplot(wt_KOrS1_bins) +
+  aes(x = WT2, y = KOrS1, colour = type2) +
+  # facet_wrap(~type2, scales = 'fixed') +
+  geom_point(size = 0.75, alpha = 0.5, stroke = 0) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_KOrS1, intercept = intercet_wt_KOrS1, linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 3.5), ylim = c(0, 3.5), clip = 'on' ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI" = '#A2234C',
+                                 "PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "Rest of the genome" = '#72817F'), 
+                      breaks = c("PcG targeted CGI", 
+                                 "PcG targeted CGI + 1",
+                                 "Rest of the genome"),
+                      labels = c("PcG targeted CGI" = "Targeted", 
+                                  "PcG targeted CGI + 1" = "Flanking",
+                                 "Rest of the genome" = "Rest of genome") ) +
+  labs(x = expression("Spike-in normalized WT H3K27me3 signal (" ~ log[10] ~ ")" ), 
+       y = expression("Spike-in normalized KO+S H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 0.99))) +
+  scatter_th -> pBins_WT_vs_KOrS1_Filtered_Targeted
+pBins_WT_vs_KOrS1_Filtered_Targeted
+```
+
+Save to pdf.
+
+```{r, save figure 5D as PDF}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5E_CGI_coloured_WT_vs_KOrS1_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_KOrS1_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Rasterise the points to 400dpi
+
+```{r, rasterise KOrS1}
+rBins_WT_vs_KOrS1_Filtered_Targeted <- rasterize(pBins_WT_vs_KOrS1_Filtered_Targeted, layers = 'Point', dpi = 400)
+```
+
+Plot rasterised scatter plot for figure 3B
+```{r, display figure 5E as rasterised, fig.width = 2, fig.height = 2}
+rBins_WT_vs_KOrS1_Filtered_Targeted
+```
+
+Save to pdf.
+
+```{r, save raterised 5E}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5E_RASTERIZED_CGI_coloured_WT_vs_KOrS1_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = rBins_WT_vs_KOrS1_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Now for the KO+L (KOrL4).
+
+### Scatter plot KO+SUZ12-L vs WT
+
+Get linear fit.
+```{r, linear fit WT vs KOrL4 or KOrL6 }
+intercet_wt_KOrL4 <- coef( lm(log_bins25kb_K27me3_rescue$KOrL4 ~ log_bins25kb_K27me3_rescue$WT2 ) )[1] 
+slope_wt_KOrL4 <- coef( lm(log_bins25kb_K27me3_rescue$KOrL4 ~ log_bins25kb_K27me3_rescue$WT2 ) )[2] 
+
+intercet_wt_KOrL6 <- coef( lm(log_bins25kb_K27me3_rescue$KOrL6 ~ log_bins25kb_K27me3_rescue$WT2 ) )[1] 
+slope_wt_KOrL6 <- coef( lm(log_bins25kb_K27me3_rescue$KOrL6 ~ log_bins25kb_K27me3_rescue$WT2 ) )[2] 
+```
+
+Check linear fit parameters
+
+```{r}
+message("WT vs KO+L4: intercept = ", round(intercet_wt_KOrL4, 3), " slope = ", round(slope_wt_KOrL4, 3))
+message("WT vs KO+L6: intercept = ", round(intercet_wt_KOrL6, 3), " slope = ", round(slope_wt_KOrL6, 3))
+```
+
+Filter the bins like before.
+Start by removing the many "rest of the genome" bins
+
+```{r, filter KOrL4 ROTG }
+indx_dups_ROTG_wt_KOrL4 <- which(duplicated(log_bins25kb_K27me3_rescue[log_bins25kb_K27me3_rescue$type2 == "Rest of the genome", c("WT2", "KOrL4")]))
+row_names_dups_ROTG <- rownames(log_bins25kb_K27me3_rescue[indx_dups_ROTG_wt_KOrL4, ]) 
+wt_KOrL4_bins <- log_bins25kb_K27me3_rescue[!rownames(log_bins25kb_K27me3_rescue) %in% row_names_dups_ROTG,]
+```
+
+Filter the "PcG targeted CGI" in KO rescue Long clone 4 vs WT dataset
+
+```{r, filter KOrL4 CGI}
+indx_dups_PTC_wt_KOrL4 <- which(duplicated(wt_KOrL4_bins[wt_KOrL4_bins$type2 == "PcG targeted CGI", c("WT2", "KOrL4")] ) )
+row_names_dups_PTC <- rownames(wt_KOrL4_bins[indx_dups_PTC_wt_KOrL4, ]) 
+wt_KOrL4_bins <- wt_KOrL4_bins[!rownames(wt_KOrL4_bins) %in% row_names_dups_PTC,]
+```
+
+And the +1 and -1 flanking bins
+```{r, filter KOrL4 flanking bins}
+indx_dups_P1M1_wt_KOrL4 <- which(duplicated(wt_KOrL4_bins[wt_KOrL4_bins$type2 %in% c("PcG targeted CGI + 1", "PcG targeted CGI + 1"), c("WT2", "KOrL4")] ) )
+row_names_dups_P1M1 <- rownames(wt_KOrL4_bins[indx_dups_P1M1_wt_KOrL4, ]) 
+wt_KOrL4_bins <- wt_KOrL4_bins[!rownames(wt_KOrL4_bins) %in% row_names_dups_P1M1,]
+```
+
+Check number of bins after filtering:
+
+```{r, get KOrL4 bins}
+num_fltrd_bins_2.5kb <- nrow(wt_KOrL4_bins)
+message("Number of bins of 2.5kb width to plot: ", num_fltrd_bins_2.5kb)
+```
+
+Plot figure 5D
+
+```{r, plot filtered scatter plot KOrL4 vs WT}
+ggplot(wt_KOrL4_bins) +
+  aes(x = WT2, y = KOrL4, colour = type2) +
+  geom_point(size = 0.75, alpha = 0.5, stroke = 0) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_KOrL4, intercept = intercet_wt_KOrL4, 
+              linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 3.5), ylim = c(0, 3.5), clip = 'on' ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI" = '#A2234C',
+                                 "PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "Rest of the genome" = '#72817F'), 
+                      breaks = c("PcG targeted CGI", 
+                                 "PcG targeted CGI + 1",
+                                 "Rest of the genome"),
+                      labels = c("PcG targeted CGI" = "Targeted", 
+                                 "PcG targeted CGI + 1" = "Flanking",
+                                 "Rest of the genome" = "Rest of genome") ) +
+  labs(x = expression("Spike-in normalized WT H3K27me3 signal (" ~ log[10] ~ ")" ), 
+       y = expression("Spike-in normalized KO+L H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 0.99))) +
+  scatter_th -> pBins_WT_vs_KOrL4_Filtered_Targeted
+pBins_WT_vs_KOrL4_Filtered_Targeted
+```
+
+Save to pdf vector.
+
+```{r, save KOrL4 vs WT scatterplot vector}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("Fig5D_CGI_coloured_WT_vs_KOrL4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_KOrL4_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Rasterise only the point layer of ggplot
+
+```{r, rasterise KOrL4 vs WT scatterplot}
+rBins_WT_vs_KOrL4_Filtered_Targeted <- rasterize(pBins_WT_vs_KOrL4_Filtered_Targeted, layers = 'Point', dpi = 400)
+```
+
+Show plot as presented in figure.
+
+```{r, display rasterised figure 5E, fig.width = 2, fig.height = 2}
+rBins_WT_vs_KOrL4_Filtered_Targeted
+```
+
+Save to pdf rasterised scatter plot.
+
+```{r, save KOrL4 vs WT scatterplot rasterised}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("Fig5D_RASTERIZED_CGI_coloured_WT_vs_KOrL4_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = rBins_WT_vs_KOrL4_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+### Scatter plot KO+SUZ12-S3D vs WT
+
+SUZ12-S 3D mutant H3K27me3 scatter plot.
+
+Get linear fit.
+```{r, linear fit WT2 vs KOrS3D2 }
+intercet_wt_KOrS3D2 <- coef( lm(log_bins25kb_K27me3_rescue$KOrS3D2 ~ log_bins25kb_K27me3_rescue$WT2 ) )[1] 
+slope_wt_KOrS3D2 <- coef( lm(log_bins25kb_K27me3_rescue$KOrS3D2 ~ log_bins25kb_K27me3_rescue$WT2 ) )[2] 
+```
+
+Check linear fit parameters
+
+```{r}
+message("WT2 vs KOrS3D2: intercept = ", round(intercet_wt_KOrS3D2, 3), 
+        " slope = ", round(slope_wt_KOrS3D2, 3))
+```
+
+Filter the bins like before.
+Start by removing the many "rest of the genome" bins
+
+```{r, filter slope wt KOrS3D2 ROTG }
+indx_dups_ROTG_wt_KOrS3D2 <- which(duplicated(log_bins25kb_K27me3_rescue[log_bins25kb_K27me3_rescue$type2 == "Rest of the genome", c("WT2", "KOrS3D2")]))
+row_names_dups_ROTG <- rownames(log_bins25kb_K27me3_rescue[indx_dups_ROTG_wt_KOrS3D2, ]) 
+wt_KOrS3D2_bins <- log_bins25kb_K27me3_rescue[!rownames(log_bins25kb_K27me3_rescue) %in% row_names_dups_ROTG,]
+```
+
+Filter the "PcG targeted CGI" in KO rescue SUZ12-Short 3D mutant vs WT dataset
+
+```{r, filter KOrS3D2 CGI}
+indx_dups_PTC_wt_KOrS3D2 <- which(duplicated(wt_KOrS3D2_bins[wt_KOrS3D2_bins$type2 == "PcG targeted CGI", c("WT2", "KOrS3D2")] ) )
+row_names_dups_PTC <- rownames(wt_KOrS3D2_bins[indx_dups_PTC_wt_KOrS3D2, ]) 
+wt_KOrS3D2_bins <- wt_KOrS3D2_bins[!rownames(wt_KOrS3D2_bins) %in% row_names_dups_PTC,]
+```
+
+And the +1 and -1 flanking bins
+```{r, filter wt_KOrS3D2_bins flanking bins}
+indx_dups_P1M1_wt_KOrS3D2 <- which(duplicated(wt_KOrS3D2_bins[wt_KOrS3D2_bins$type2 %in% c("PcG targeted CGI + 1", "PcG targeted CGI + 1"), c("WT2", "KOrS3D2")] ) )
+row_names_dups_P1M1 <- rownames(wt_KOrS3D2_bins[indx_dups_P1M1_wt_KOrS3D2, ]) 
+wt_KOrS3D2_bins <- wt_KOrS3D2_bins[!rownames(wt_KOrS3D2_bins) %in% row_names_dups_P1M1,]
+```
+
+Check number of bins after filtering:
+
+```{r, get KOrS3D2 bins}
+num_fltrd_bins_2.5kb <- nrow(wt_KOrS3D2_bins)
+message("Number of bins of 2.5kb width to plot: ", num_fltrd_bins_2.5kb)
+```
+
+Plot figure S5G
+
+```{r, plot filtered scatter plot KOrS3D2 vs WT, fig.width = 2, fig.height = 2}
+ggplot(wt_KOrS3D2_bins) +
+  aes(x = WT2, y = KOrS3D2, colour = type2) +
+  geom_point(size = 0.75, alpha = 0.5, stroke = 0) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_KOrS3D2, intercept = intercet_wt_KOrS3D2, 
+              linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 3.5), ylim = c(0, 3.5), clip = 'on' ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI" = '#A2234C',
+                                 "PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "Rest of the genome" = '#72817F'), 
+                      breaks = c("PcG targeted CGI", 
+                                 "PcG targeted CGI + 1",
+                                 "Rest of the genome"),
+                      labels = c("PcG targeted CGI" = "Targeted", 
+                                 "PcG targeted CGI + 1" = "Flanking",
+                                 "Rest of the genome" = "Rest of genome") ) +
+  labs(x = expression("Spike-in normalized WT2 H3K27me3 signal (" ~ log[10] ~ ")" ), 
+       y = expression("Spike-in normalized KO+S-3D H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 0.99))) +
+  scatter_th -> pBins_WT_vs_KOrS3D2_Filtered_Targeted
+pBins_WT_vs_KOrS3D2_Filtered_Targeted
+```
+
+Save to pdf vector.
+
+```{r, save KOrS3D2 vs WT scatterplot vector}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("FigS5G_CGI_coloured_WT_vs_KOrS3D2_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_KOrS3D2_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Rasterise only the point layer of ggplot
+
+```{r, rasterise KOrS3D2 vs WT scatterplot}
+rBins_WT_vs_KOrS3D2_Filtered_Targeted <- rasterize(pBins_WT_vs_KOrS3D2_Filtered_Targeted,
+                                                   layers = 'Point', dpi = 400)
+```
+
+Show plot as presented in figure.
+
+```{r, display rasterised figure KOrS3D2, fig.width = 2, fig.height = 2}
+rBins_WT_vs_KOrS3D2_Filtered_Targeted
+```
+
+Save to pdf rasterised scatter plot.
+
+```{r, save KOrS3D2 vs WT scatterplot rasterised}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("FigS5G_RASTERIZED_CGI_coloured_WT_vs_KOrS3D2_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = rBins_WT_vs_KOrS3D2_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Show the same plot but **without** the log10 scaling of the data.
+
+```{r, fig.width = 2, fig.height = 2}
+ggplot(wt_KOrS3D2_bins) +
+  aes(x = 10^WT2, y = 10^KOrS3D2, colour = type2) +
+  geom_point(size = 0.75, alpha = 0.5, stroke = 0) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_KOrS3D2, intercept = intercet_wt_KOrS3D2, 
+              linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 150), ylim = c(0, 150), clip = 'on' ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI" = '#A2234C',
+                                 "PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "Rest of the genome" = '#72817F'), 
+                      breaks = c("PcG targeted CGI", 
+                                 "PcG targeted CGI + 1",
+                                 "Rest of the genome"),
+                      labels = c("PcG targeted CGI" = "Targeted", 
+                                 "PcG targeted CGI + 1" = "Flanking",
+                                 "Rest of the genome" = "Rest of genome") ) +
+  labs(x = expression("Spike-in normalized WT#2 H3K27me3 signal" ), 
+       y = expression("Spike-in normalized KO+S-3D H3K27me3 signal" ) ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 0.99))) +
+  scatter_th +
+  theme(legend.position = c(0.3, 0.92) ) -> pBins_WT_vs_KOrS3D2_Filtered_Targeted_NOLOG10
+pBins_WT_vs_KOrS3D2_Filtered_Targeted_NOLOG10
+```
+
+Save to pdf vector.
+
+```{r, save KOrS3D2 vs WT scatterplot vector no log}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("FigS5G_CGI_NoLog10_WT_vs_KOrS3D2_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_KOrS3D2_Filtered_Targeted_NOLOG10, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Rasterise only the point layer of ggplot
+
+```{r, rasterise KOrS3D2 vs WT scatterplot no log10}
+rBins_WT_vs_KOrS3D2_NoLog10 <- rasterize(pBins_WT_vs_KOrS3D2_Filtered_Targeted_NOLOG10, 
+                                                   layers = 'Point', dpi = 400)
+```
+
+Show plot as presented in figure.
+
+```{r, display rasterised figure KOrS3D2 no log10, fig.width = 2, fig.height = 2}
+rBins_WT_vs_KOrS3D2_NoLog10
+```
+
+Save to pdf rasterised scatter plot.
+
+```{r, save KOrS3D2 vs WT scatterplot rasterised no log10}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("FigS5G_RASTERIZED_CGI_NoLog10_WT_vs_KOrS3D2_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = rBins_WT_vs_KOrS3D2_NoLog10, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+### Scatter plot KO+SUZ12-L3D vs WT
+
+SUZ12-L 3D mutant H3K27me3 scatter plot.
+
+Get linear fit.
+```{r, linear fit WT vs KOrL3D2 }
+intercet_wt_KOrL3D2 <- coef( lm(log_bins25kb_K27me3_rescue$KOrL3D2 ~ log_bins25kb_K27me3_rescue$WT2 ) )[1] 
+slope_wt_KOrL3D2 <- coef( lm(log_bins25kb_K27me3_rescue$KOrL3D2 ~ log_bins25kb_K27me3_rescue$WT2 ) )[2] 
+```
+
+Check linear fit parameters
+
+```{r}
+message("WT vs KO+L-3D: intercept = ", round(intercet_wt_KOrL3D2, 3), 
+        " slope = ", round(slope_wt_KOrL3D2, 3))
+```
+
+Filter the bins like before.
+Start by removing the many "rest of the genome" bins
+
+```{r, filter KOrL3D2 ROTG }
+indx_dups_ROTG_wt_KOrL3D2 <- which(duplicated(log_bins25kb_K27me3_rescue[log_bins25kb_K27me3_rescue$type2 == "Rest of the genome", c("WT2", "KOrL3D2")]))
+row_names_dups_ROTG <- rownames(log_bins25kb_K27me3_rescue[indx_dups_ROTG_wt_KOrL3D2, ]) 
+wt_KOrL3D2_bins <- log_bins25kb_K27me3_rescue[!rownames(log_bins25kb_K27me3_rescue) %in% row_names_dups_ROTG,]
+```
+
+Filter the "PcG targeted CGI" in KO rescue SUZ12-Long 3D mutant vs WT dataset
+
+```{r, filter KOrL3D2 CGI}
+indx_dups_PTC_wt_KOrL3D2 <- which(duplicated(wt_KOrL3D2_bins[wt_KOrL3D2_bins$type2 == "PcG targeted CGI", c("WT2", "KOrL3D2")] ) )
+row_names_dups_PTC <- rownames(wt_KOrL3D2_bins[indx_dups_PTC_wt_KOrL3D2, ]) 
+wt_KOrL3D2_bins <- wt_KOrL3D2_bins[!rownames(wt_KOrL3D2_bins) %in% row_names_dups_PTC,]
+```
+
+And the +1 and -1 flanking bins
+```{r, filter KOrL3D2 flanking bins}
+indx_dups_P1M1_wt_KOrL3D2 <- which(duplicated(wt_KOrL3D2_bins[wt_KOrL3D2_bins$type2 %in% c("PcG targeted CGI + 1", "PcG targeted CGI + 1"), c("WT2", "KOrL3D2")] ) )
+row_names_dups_P1M1 <- rownames(wt_KOrL3D2_bins[indx_dups_P1M1_wt_KOrS3D2, ]) 
+wt_KOrL3D2_bins <- wt_KOrL3D2_bins[!rownames(wt_KOrL3D2_bins) %in% row_names_dups_P1M1,]
+```
+
+Check number of bins after filtering:
+
+```{r, get KOrL3D2 bins}
+num_fltrd_bins_2.5kb <- nrow(wt_KOrL3D2_bins)
+message("Number of bins of 2.5kb width to plot: ", num_fltrd_bins_2.5kb)
+```
+
+Plot figure S5F
+
+```{r, plot filtered scatter plot KOrL3D2 vs WT, fig.width = 2, fig.height = 2}
+ggplot(wt_KOrL3D2_bins) +
+  aes(x = WT2, y = KOrL3D2, colour = type2) +
+  geom_point(size = 0.75, alpha = 0.5, stroke = 0) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_KOrL3D2, intercept = intercet_wt_KOrL3D2, 
+              linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 3.5), ylim = c(0, 3.5), clip = 'on' ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI" = '#A2234C',
+                                 "PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "Rest of the genome" = '#72817F'), 
+                      breaks = c("PcG targeted CGI", 
+                                 "PcG targeted CGI + 1",
+                                 "Rest of the genome"),
+                      labels = c("PcG targeted CGI" = "Targeted", 
+                                 "PcG targeted CGI + 1" = "Flanking",
+                                 "Rest of the genome" = "Rest of genome") ) +
+  labs(x = expression("Spike-in normalized WT#2 H3K27me3 signal (" ~ log[10] ~ ")" ), 
+       y = expression("Spike-in normalized KO+L-3D H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 0.99))) +
+  scatter_th -> pBins_WT_vs_KOrL3D2_Filtered_Targeted
+pBins_WT_vs_KOrL3D2_Filtered_Targeted
+```
+
+Save to pdf vector.
+
+```{r, save KOrL3D2 vs WT scatterplot vector}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("FigS5F_CGI_coloured_WT_vs_KOrL3D2_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_KOrL3D2_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Rasterise only the point layer of ggplot
+
+```{r, rasterise KOrL3D2 vs WT scatterplot}
+rBins_WT_vs_KOrL3D2_Filtered_Targeted <- rasterize(pBins_WT_vs_KOrL3D2_Filtered_Targeted,
+                                                   layers = 'Point', dpi = 400)
+```
+
+Show plot as presented in figure.
+
+```{r, display rasterised figure KOrL3D2, fig.width = 2, fig.height = 2}
+rBins_WT_vs_KOrL3D2_Filtered_Targeted
+```
+
+Save to pdf rasterised scatter plot.
+
+```{r, save KOrL3D2 vs WT scatterplot rasterised}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("FigS5F_RASTERIZED_CGI_coloured_WT_vs_KOrL3D2_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = rBins_WT_vs_KOrL3D2_Filtered_Targeted, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Show the same plot but **without** the log10 scaling of the data.
+
+```{r, fig.width = 2, fig.height = 2}
+ggplot(wt_KOrL3D2_bins) +
+  aes(x = 10^WT2, y = 10^KOrL3D2, colour = type2) +
+  geom_point(size = 0.75, alpha = 0.5, stroke = 0) +
+  geom_abline(slope = 1, intercept = 0, linewidth = 0.2) +
+  geom_abline(slope = slope_wt_KOrS3D2, intercept = intercet_wt_KOrS3D2, 
+              linetype = 'dashed', linewidth = 0.2) +
+  coord_fixed(ratio = 1, xlim = c(0, 150), ylim = c(0, 150), clip = 'on' ) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0, 0.5) ) ) +
+  scale_colour_manual(values = c("PcG targeted CGI" = '#A2234C',
+                                 "PcG targeted CGI - 1" = '#203059', 
+                                 "PcG targeted CGI + 1" = '#203059',
+                                 "Rest of the genome" = '#72817F'), 
+                      breaks = c("PcG targeted CGI", 
+                                 "PcG targeted CGI + 1",
+                                 "Rest of the genome"),
+                      labels = c("PcG targeted CGI" = "Targeted", 
+                                 "PcG targeted CGI + 1" = "Flanking",
+                                 "Rest of the genome" = "Rest of genome") ) +
+  labs(x = expression("Spike-in normalized WT#2 H3K27me3 signal" ), 
+       y = expression("Spike-in normalized KO+L-3D H3K27me3 signal" ) ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 0.99))) +
+  scatter_th +
+  theme(legend.position = c(0.27, 0.92) ) -> pBins_WT_vs_KOrL3D2_Filtered_Targeted_NOLOG10
+pBins_WT_vs_KOrL3D2_Filtered_Targeted_NOLOG10
+```
+
+Save to pdf vector.
+
+```{r, save KOrL3D2 vs WT scatterplot vector no log}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("FigS5F_CGI_NoLog10_WT_vs_KOrL3D2_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = pBins_WT_vs_KOrL3D2_Filtered_Targeted_NOLOG10, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+Rasterise only the point layer of ggplot
+
+```{r, rasterise KOrL3D2 vs WT scatterplot no log10}
+rBins_WT_vs_KOrL3D2_NoLog10 <- rasterize(pBins_WT_vs_KOrL3D2_Filtered_Targeted_NOLOG10, 
+                                                   layers = 'Point', dpi = 400)
+```
+
+Show plot as presented in figure.
+
+```{r, display rasterised figure KOrL3D2 no log10, fig.width = 2, fig.height = 2}
+rBins_WT_vs_KOrL3D2_NoLog10
+```
+
+Save to pdf rasterised scatter plot.
+
+```{r, save KOrL3D2 vs WT scatterplot rasterised no log10}
+ggsave(path = pdf_dir_fig5,  
+       filename = paste0("FigS5F_RASTERIZED_CGI_NoLog10_WT_vs_KOrL3D2_bins_n", num_fltrd_bins_2.5kb, ".pdf"),
+       plot = rBins_WT_vs_KOrL3D2_NoLog10, device = cairo_pdf, units = "cm",
+       width = 4.2, height = 4.2)
+```
+
+## Boxplot H3K27me3 signal in 2.5kb genomic bins
 
 Display the same H3K27me3 signal in 2.5kb genomic bins as boxplots.
 
 Code below is needed to colour the `ggplot2` facet strip text.
 
-```{r,  Only colour strips in x-direction}
+```{r, Only colour strips in x-direction}
 # requires package ggh4x
 CGI_coloured_strip <-
   strip_themed(background_x = elem_list_rect(fill = c(
@@ -603,15 +1292,32 @@ strip_CGI_conversion <- c(
 )
 ```
 
-Plot boxplot for panel 5D.
+Reshape the data for plotting.
 
-```{r, plot figure 5D, fig.width = 2.75, fig.height = 1.9}
+```{r}
 log_bins25kb_K27me3 |>
   as_tibble() |>
   pivot_longer(cols = c("WT", 'CSex4', 'dex4', 'KO'), names_to = 'Sample', values_to = "log10_H3K27me3") |>
   mutate(Sample = factor(Sample, levels = c("WT", 'CSex4', 'dex4', 'KO') ) ) |>
-  mutate(type2 = factor(type2, levels = c('PcG targeted CGI - 1', 'PcG targeted CGI', 'PcG targeted CGI + 1', 'Rest of the genome') ) ) |>
-  ggplot() +
+  mutate(type2 = factor(type2, levels = c('PcG targeted CGI - 1', 'PcG targeted CGI', 'PcG targeted CGI + 1', 'Rest of the genome') ) ) -> endogenous_bins
+
+log_bins25kb_K27me3_rescue |>
+  as_tibble() |>
+  pivot_longer(cols = c("WT2", 'KOrL4', 'KOrL6', 'KOrS1', 'KOrS3', 'KOrL3D2', 'KOrS3D2'), 
+               names_to = 'Sample', values_to = "log10_H3K27me3") |>
+  mutate(Sample = factor(Sample, levels = c("WT2", 'KOrL4', 'KOrL6', 'KOrS1', 'KOrS3', 'KOrL3D2', 'KOrS3D2') ) ) |>
+  mutate(type2 = factor(type2, 
+                        levels = c('PcG targeted CGI - 1', 
+                                   'PcG targeted CGI',
+                                   'PcG targeted CGI + 1',
+                                   'Rest of the genome') )
+         ) -> rescue_bins
+```
+
+Plot boxplot for panel 5F without the KO rescue lines
+
+```{r, plot endogenous samples, fig.width = 2.75, fig.height = 1.9}
+ggplot(endogenous_bins) +
   aes(x = Sample, y = log10_H3K27me3, fill = Sample) +
   facet_wrap2(~type2, nrow = 1, scales = 'fixed', strip = CGI_coloured_strip, 
               labeller = labeller(type2 = strip_CGI_conversion ) ) +
@@ -622,17 +1328,205 @@ log_bins25kb_K27me3 |>
   scale_fill_manual(values = c('WT' = "#377AA3", 'CSex4' = "#B65120", 
                                'dex4' = "#F7CB48",'KO' = "#728189") ) +
   labs(y =  expression("Spike-in normalized H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
-  boxplot_th -> pBoxPlot_CGI_quant
-pBoxPlot_CGI_quant
+  boxplot_th -> pBoxPlot_CGI_quant_endogenous
+pBoxPlot_CGI_quant_endogenous
 ```
 
 Save to pdf.
 
-```{r, save plot figure 5D}
+```{r, save plot figure 5F endogenous}
 ggsave(path = pdf_dir_fig5, 
-       filename = paste0("Fig5D_2.5kb_Bins_Boxplot.pdf"),
-       plot = pBoxPlot_CGI_quant, device = cairo_pdf, units = "cm",
+       filename = paste0("Fig5F_2.5kb_Bins_Boxplot_endogenous_lines.pdf"),
+       plot = pBoxPlot_CGI_quant_endogenous, device = cairo_pdf, units = "cm",
        width = 7.3, height = 5)
+```
+
+Now same plot with rescue lines
+
+```{r, plot rescue samples, fig.width = 3.95, fig.height = 1.9}
+ggplot(rescue_bins) +
+  aes(x = Sample, y = log10_H3K27me3, fill = Sample) +
+  facet_wrap2(~type2, nrow = 1, scales = 'fixed', strip = CGI_coloured_strip, 
+              labeller = labeller(type2 = strip_CGI_conversion ) ) +
+  geom_boxplot(outlier.shape = NA, linewidth = 0.2, show.legend = F) +
+  scale_x_discrete(labels = c('WT2' = 'WT', 'KOrL4' = 'KO+L#1', 
+                              'KOrL6' = 'KO+L#2', 'KOrS1' = 'KO+S#1', 
+                              'KOrS3' = 'KO+S#2',
+                              'KOrL3D2' = 'KO+L-3D', 'KOrS3D2' = 'KO+S-3D') ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.02), add = 0),
+                     n.breaks = 6) +
+  coord_cartesian(ylim = c(0, 2.25), clip = 'on') +
+  scale_fill_manual(values = c('WT2' = "#377AA3",
+                               "KOrL4" = "mediumpurple2", "KOrL6" = "mediumpurple3", 
+                               "KOrS1" = "darkorange1",  "KOrS3" = "darkorange2",
+                               "KOrL3D2" = "#74A57F", "KOrS3D2" = "#E8B4BC")
+                    ) +
+  labs(y =  expression("Spike-in normalized H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  boxplot_th -> pBoxPlot_CGI_quant_rescues
+pBoxPlot_CGI_quant_rescues
+```
+
+Save to pdf.
+
+```{r, save plot figure 5F rescues}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5F_2.5kb_Bins_Boxplot_rescue_lines.pdf"),
+       plot = pBoxPlot_CGI_quant_rescues, device = cairo_pdf, units = "cm",
+       width = 7.5, height = 5)
+```
+
+Combine the 2 into one plot:
+
+```{r, plot both endogenous and rescue samples, fig.width = 3.95, fig.height = 1.9}
+rbind(endogenous_bins, rescue_bins) |>
+  subset(! Sample %in% c('KOrL6', 'KOrS3') ) |> #'WT2', 
+  ggplot() +
+  aes(x = Sample, y = log10_H3K27me3, fill = Sample) +
+  facet_wrap2(~type2, nrow = 1, scales = 'fixed', strip = CGI_coloured_strip, 
+              labeller = labeller(type2 = strip_CGI_conversion ) ) +
+  geom_boxplot(outlier.shape = NA, linewidth = 0.2, show.legend = F) +
+  scale_x_discrete(labels = c('dex4' = '∆ex4', 'KOrL4' = 'KO+L', 
+                              'KOrS1' = 'KO+S', 'KOrL3D2' = 'KO+L-3D',
+                              'KOrS3D2' = 'KO+S-3D') ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0.2, 0.2) ) ) +
+  coord_cartesian(ylim = c(0, 3.5), clip = 'on') +
+  scale_fill_manual(values = c('WT' = "#377AA3", 'WT2' = "#377AA3", 'CSex4' = "#B65120",
+                               'dex4' = "#F7CB48",'KO' = "#728189",
+                               "KOrL4" = "mediumpurple2", "KOrS1" = "darkorange1",
+                               "KOrL3D2" = "#74A57F", "KOrS3D2" = "#E8B4BC") ) +
+  labs(y =  expression("Spike-in normalized H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  boxplot_th -> pBoxPlot_CGI_quant
+pBoxPlot_CGI_quant
+```
+
+I think the fact that the spike-in normalisation is was done with 2 different batches might explain with the KO rescues are lower than the KO.
+
+```{r, save plot figure 5F}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5F_2.5kb_Bins_Boxplot_endogenous_rescue_lines.pdf"),
+       plot = pBoxPlot_CGI_quant, device = cairo_pdf, units = "cm",
+       width = 7.5, height = 5)
+```
+
+Combine up and down flanking regions into facet
+
+```{r, set facets for combined up and down flanking regions}
+CGI_coloured_strip <-
+  strip_themed(background_x = elem_list_rect(fill = c(
+    '#A2234C', '#203059', '#72817F')),
+  text_x = elem_list_text(colour = c('white')))
+
+strip_CGI_conversion <- c(
+  `Targeted CGI` = "Targeted CGI",
+  `Flanking region` = "Flanking",
+  `Rest of the genome` = "Rest of genome"
+)
+```
+
+Reshape data
+```{r, reshape data to split by batch}
+samples_batch1 <- c('WT', 'dex4', 'CSex4', 'KO')
+samples_batch2 <- c('WT2', 'KOrL4', 'KOrL6', 'KOrS1', 'KOrS3', 'KOrL3D2', 'KOrS3D2')
+
+rbind(endogenous_bins, rescue_bins) |>
+  subset(! Sample %in% c('KOrL6', 'KOrS3') ) |>
+  mutate(type3 = type2) |>
+  mutate(type3 = case_when(type3 == 'PcG targeted CGI - 1' ~ 'Flanking region',
+                           type3 == 'PcG targeted CGI + 1' ~ 'Flanking region',
+                           type3 == 'PcG targeted CGI' ~ 'Targeted CGI',
+                           type3 == 'Rest of the genome' ~ 'Rest of the genome') ) |>
+  mutate(type3 = factor(type3, levels = c('Targeted CGI', 'Flanking region', 'Rest of the genome'))) |>
+  mutate(batch = case_when(Sample %in% samples_batch1 ~ 'Batch1',
+                           Sample %in% samples_batch2 ~ 'Batch2')
+         ) -> combined
+```
+
+Plot figure 5F final.
+
+```{r, plot both endogenous and rescue samples combined flanking, fig.width = 5.5, fig.height = 1.9}
+ggplot(combined) +
+  aes(x = Sample, y = log10_H3K27me3, fill = Sample) +
+  facet_wrap2(~batch+type3, nrow = 1, scales = 'free_x', strip = CGI_coloured_strip, 
+              labeller = labeller(type3 = strip_CGI_conversion ) ) +
+  geom_boxplot(outlier.shape = NA, linewidth = 0.2, show.legend = F) +
+  scale_x_discrete(labels = c('WT' = 'WT#1', 'WT2' = 'WT#2',
+                              'dex4' = '∆ex4', 'KOrL4' = 'KO+L', 
+                              'KOrS1' = 'KO+S', 'KOrL3D2' = 'KO+L-3D',
+                              'KOrS3D2' = 'KO+S-3D') ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0.2, 0.2) ) ) +
+  coord_cartesian(ylim = c(0, 3.5), clip = 'on') +
+  scale_fill_manual(values = c('WT' = "#377AA3", 'WT2' = "#377AA3", 'CSex4' = "#B65120",
+                               'dex4' = "#F7CB48",'KO' = "#728189",
+                               "KOrL4" = "mediumpurple2", "KOrS1" = "darkorange1",
+                               "KOrL3D2" = "#74A57F", "KOrS3D2" = "#E8B4BC") ) +
+  labs(y =  expression("Spike-in normalized H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  boxplot_th -> pBoxPlot_CGI_quant_3facets
+pBoxPlot_CGI_quant_3facets
+```
+
+Save to pdf.
+
+```{r, save plot figure 5F 3 facets}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5F_2.5kb_Bins_Boxplot_endogenous_rescue_lines_3facets.pdf"),
+       plot = pBoxPlot_CGI_quant_3facets, device = cairo_pdf, units = "cm",
+       width = 11.0, height = 5)
+```
+
+Split the 2 batches of ChIP-seq in one main and one supplementary figure.
+
+```{r, plot endogenous batch fig 5F, fig.width = 2.5, fig.height = 1.9 }
+subset(combined, batch == 'Batch1') |>
+ggplot() +
+  aes(x = Sample, y = log10_H3K27me3, fill = Sample) +
+  facet_wrap2( ~type3, nrow = 1, scales = 'fixed', strip = CGI_coloured_strip, 
+              labeller = labeller(type3 = strip_CGI_conversion ) ) +
+  geom_boxplot(outlier.shape = NA, linewidth = 0.2, show.legend = F) +
+  scale_x_discrete(labels = c('dex4' = '∆ex4') ) +
+  scale_y_continuous(expand = expansion(mult = 0, add = c(0.2, 0.2) ) ) +
+  coord_cartesian(ylim = c(0, 3.5), clip = 'on') +
+  scale_fill_manual(values = c('WT' = "#377AA3", 'CSex4' = "#B65120",
+                               'dex4' = "#F7CB48",'KO' = "#728189") ) +
+  labs(y =  expression("Spike-in normalized H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  boxplot_th -> pBoxPlot_CGI_quant_3facets_batch1
+pBoxPlot_CGI_quant_3facets_batch1
+```
+
+Save to pdf.
+
+```{r, save plot figure 5F 3 facets only endogenous batch1 }
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5F_2.5kb_Bins_Boxplot_endogenous_lines_3facets_batch1.pdf"),
+       plot = pBoxPlot_CGI_quant_3facets_batch1, device = cairo_pdf, units = "cm",
+       width = 5.5, height = 5)
+```
+
+Batch 2
+
+```{r, plot rescue batch2 fig 5F, fig.width = 2.85, fig.height = 1.9 }
+subset(combined, batch == 'Batch2') |>
+ggplot() +
+  aes(x = Sample, y = log10_H3K27me3, fill = Sample) +
+  facet_wrap2(~type3, nrow = 1, scales = 'fixed', strip = CGI_coloured_strip, 
+              labeller = labeller(type3 = strip_CGI_conversion ) ) +
+  geom_boxplot(outlier.shape = NA, linewidth = 0.2, show.legend = F) +
+  scale_x_discrete(labels = c('WT2' = 'WT', 'KOrL4' = 'KO+L', 'KOrS1' = 'KO+S',
+                              'KOrL3D2' = 'KO+L-3D', 'KOrS3D2' = 'KO+S-3D') ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.02), add = 0) ) +
+  coord_cartesian(ylim = c(0, 2.5), clip = 'on') +
+  scale_fill_manual(values = c('WT2' = "#377AA3",
+                               "KOrL4" = "mediumpurple2", "KOrS1" = "darkorange1",
+                               "KOrL3D2" = "#74A57F", "KOrS3D2" = "#E8B4BC") ) +
+  labs(y =  expression("Spike-in normalized H3K27me3 signal (" ~ log[10] ~ ")" ) ) +
+  boxplot_th -> pBoxPlot_CGI_quant_3facets_batch2
+pBoxPlot_CGI_quant_3facets_batch2
+```
+
+```{r, save plot figure 5F 3 facets only rescues batch 2 }
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("FigS5H_2.5kb_Bins_Boxplot_rescue_lines_3facets_batch2.pdf"),
+       plot = pBoxPlot_CGI_quant_3facets_batch2, device = cairo_pdf, units = "cm",
+       width = 5.5, height = 5)
 ```
 
 ## H3K27me3 signal at PRC2 targeted (or not) CpG Islands
@@ -698,7 +1592,6 @@ strip_CGI_conversion <- c(
   `PRC2 targeted CGI (n = 2665)` = "SUZ12 Targeted CGI (n = 2665)",
   `Other CGI (n = 9999)` = "Non-targeted CGI (n = 9999)"
 )
-
 ```
 
 Plot H3K27me3 signal in the CGI targeted regions used for the meta genes later on as a boxplot.
@@ -725,8 +1618,7 @@ ggsave(path = pdf_dir_fig5,
        width = 7.3, height = 5)
 ```
 
-
-### Metagene profiles spike-in normalised
+### Metagene profiles spike-in normalised in endogenous cells
 
 Import profiles stored in text files.
 
@@ -815,7 +1707,7 @@ strip_CGI_conversion <- c(
 
 Since the data contains every single nucleotide signal, I use only 1/4 of the data to plot as this does not affect the trend, but makes the pdf file easier to work with. This is done by using ` sample_frac(size = 0.25)`.
 
-```{r, plot figure 5E, fig.width = 2.7, fig.height = 1.85}
+```{r, plot figure 5G, fig.width = 2.7, fig.height = 1.85}
 Meta_K27me3 |>
   sample_frac(size = 0.25) |> 
 ggplot() +
@@ -829,6 +1721,7 @@ ggplot() +
   scale_colour_manual(values = c('WT' = "#377AA3", 'CSex4' = "#B65120",
                                  'dex4' = "#F7CB48",'KO' = "#728189"),
                       labels = c('dex4' = '∆ex4') ) +
+  # coord_cartesian(ylim = c(0, NA), clip = 'off' ) +
   labs(x = 'Distance to CGI center (kb)', 
        y = expression("Spike-in normalised H3K27me3 signal (" ~ log[10] ~ ")" )) +
   profile_th -> pMetaPlot_CGI
@@ -837,12 +1730,171 @@ pMetaPlot_CGI
 
 Save to pdf.
 
-```{r, save figure 5E}
+```{r, save figure 5F}
 ggsave(path = pdf_dir_fig5, 
-       filename = paste0("Fig3E_Targeted_CGI_Metagene_Profiles.pdf"),
+       filename = paste0("Fig5G_Targeted_CGI_Metagene_Profiles_Endogenous_Lines.pdf"),
        plot = pMetaPlot_CGI, device = cairo_pdf, units = "cm",
        width = 7.3, height = 4.9)
 ```
+
+### Metagene profiles spike-in normalised in rescues cell lines
+
+Metagene profile spike-in normalised.
+
+Import the files Enrique made for the targeted CGI for the MTF2 ChIP-seq.
+
+```{r, import targeted CGI files H3K27me3 in rescues}
+trgtd_K27me3_WT1 <- read_prfl(path_dir = round23_metagene_dir,
+                              txt_name = "M1A_GENEplot_5000/GENEprofile_M1A_5000.txt",
+                              epitope = "H3K27me3", geneset_type = "PRC2 targeted CGI", 
+                              sample_name = "WT1")
+
+trgtd_K27me3_WT2 <- read_prfl(path_dir = round23_metagene_dir,
+                              txt_name = "M2A_GENEplot_5000/GENEprofile_M2A_5000.txt",
+                              epitope = "H3K27me3", geneset_type = "PRC2 targeted CGI", 
+                              sample_name = "WT2")
+
+trgtd_K27me3_L1 <- read_prfl(path_dir = round23_metagene_dir,
+                             txt_name = "M5A_GENEplot_5000/GENEprofile_M5A_5000.txt",
+                             epitope = "H3K27me3", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "KOrL1")
+
+trgtd_K27me3_L2 <- read_prfl(path_dir = round23_metagene_dir,
+                             txt_name = "M6A_GENEplot_5000/GENEprofile_M6A_5000.txt",
+                             epitope = "H3K27me3", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "KOrL2")
+
+trgtd_K27me3_S1 <- read_prfl(path_dir = round23_metagene_dir,
+                             txt_name = "M3A_GENEplot_5000/GENEprofile_M3A_5000.txt",
+                             epitope = "H3K27me3", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "KOrS1")
+
+trgtd_K27me3_S2 <- read_prfl(path_dir = round23_metagene_dir,
+                             txt_name = "M4A_GENEplot_5000/GENEprofile_M4A_5000.txt",
+                             epitope = "H3K27me3", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "KOrS2")
+
+trgtd_K27me3_L3D <- read_prfl(path_dir = round23_metagene_dir,
+                             txt_name = "31A_GENEplot_5000/GENEprofile_31A_5000.txt",
+                             epitope = "H3K27me3", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "KOrL3D1")
+
+trgtd_K27me3_S3D <- read_prfl(path_dir = round23_metagene_dir,
+                             txt_name = "32A_GENEplot_5000/GENEprofile_32A_5000.txt",
+                             epitope = "H3K27me3", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "KOrS3D1")
+
+CGI_targeted_K27me3 <- rbind(trgtd_K27me3_WT1, trgtd_K27me3_WT2,
+                             trgtd_K27me3_L1, trgtd_K27me3_L2,
+                             trgtd_K27me3_S1, trgtd_K27me3_S2,
+                             trgtd_K27me3_L3D, trgtd_K27me3_S3D) |>
+  as_tibble()
+```
+
+Import rescues signal in not targeted CGIs.
+
+```{r, import non targeted CGI files H3K27me3 in rescues}
+nontrgtd_K27me3_WT1 <- read_prfl(path_dir = round23_metagene_dir,
+                                txt_name = "M1B_GENEplot_5000/GENEprofile_M1B_5000.txt",
+                                  epitope = "H3K27me3", geneset_type = "Other CGI", 
+                              sample_name = "WT1")
+
+nontrgtd_K27me3_WT2 <- read_prfl(path_dir = round23_metagene_dir,
+                                txt_name = "M2B_GENEplot_5000/GENEprofile_M2B_5000.txt",
+                                epitope = "H3K27me3", geneset_type = "Other CGI", 
+                                sample_name = "WT2")
+
+nontrgtd_K27me3_L1 <- read_prfl(path_dir = round23_metagene_dir,
+                               txt_name = "M5B_GENEplot_5000/GENEprofile_M5B_5000.txt",
+                               epitope = "H3K27me3", geneset_type = "Other CGI", 
+                               sample_name = "KOrL1")
+
+nontrgtd_K27me3_L2 <- read_prfl(path_dir = round23_metagene_dir,
+                               txt_name = "M6B_GENEplot_5000/GENEprofile_M6B_5000.txt",
+                               epitope = "H3K27me3", geneset_type = "Other CGI", 
+                               sample_name = "KOrL2")
+
+nontrgtd_K27me3_S1 <- read_prfl(path_dir = round23_metagene_dir,
+                                txt_name = "M3B_GENEplot_5000/GENEprofile_M3B_5000.txt",
+                                epitope = "H3K27me3", geneset_type = "Other CGI", 
+                                sample_name = "KOrS1")
+
+nontrgtd_K27me3_S2 <- read_prfl(path_dir = round23_metagene_dir,
+                                txt_name = "M4B_GENEplot_5000/GENEprofile_M4B_5000.txt",
+                                epitope = "H3K27me3", geneset_type = "Other CGI", 
+                                sample_name = "KOrS2")
+
+nontrgtd_K27me3_L3D <- read_prfl(path_dir = round23_metagene_dir,
+                                 txt_name = "31B_GENEplot_5000/GENEprofile_31B_5000.txt",
+                                 epitope = "H3K27me3", geneset_type = "Other CGI", 
+                                 sample_name = "KOrL3D1")
+
+nontrgtd_K27me3_S3D <- read_prfl(path_dir = round23_metagene_dir,
+                                 txt_name = "32B_GENEplot_5000/GENEprofile_32B_5000.txt",
+                                 epitope = "H3K27me3", geneset_type = "Other CGI", 
+                                 sample_name = "KOrS3D1")
+
+CGI_other_K27me3 <- rbind(nontrgtd_K27me3_WT1, nontrgtd_K27me3_WT2,
+                          nontrgtd_K27me3_L1, nontrgtd_K27me3_L2,
+                          nontrgtd_K27me3_S1, nontrgtd_K27me3_S2,
+                          nontrgtd_K27me3_L3D, nontrgtd_K27me3_S3D) |>
+  as_tibble()
+```
+
+Combine data and reshape it for plotting.
+
+```{r, tidy data of K27me3 for meta gene profiles plot of rescue lines}
+Meta_K27me3 <- rbind(CGI_targeted_K27me3, CGI_other_K27me3) |>
+  mutate(MetaPosition = MetaPosition - 5000) |>
+  mutate(Genotype = str_remove(pattern = "[a1-z9]$", string = Sample)) |> # remove last number (i.e. replicate)
+  mutate(type = factor(type, levels = c("PRC2 targeted CGI", "Other CGI") )) |>
+  group_by(Genotype, type, MetaPosition) |>
+  mutate(Average_Signal = mean(H3K27me3_signal, na.rm = T) )|>
+  arrange(MetaPosition) |>
+  ungroup() |>
+  mutate(Genotype = str_replace(pattern = 'r', replacement = '\\+', Genotype)) |>
+  mutate(Genotype = factor(Genotype, levels = rev(c('WT', 'KO+L', 'KO+S', 'KO+L3D', 'KO+S3D')) ) ) |>
+  mutate(Sample = factor(Sample, 
+                         levels = c('WT1', 'WT2', 'KOrL1', 'KOrL2', 'KOrS1', 'KOrS2', 'KOrL3D1', 'KOrS3D1'))) |>
+  mutate(MetaPosition = MetaPosition / 1000) |> # turn bases in kilo-bases
+# subset a small a fraction of the total.
+  select(MetaPosition, type, Genotype, Average_Signal) |> 
+  unique() |> sample_frac(size = 0.25) 
+```
+
+Set colour palettes and plot
+
+```{r, plot figure S5 H3K27me3 rescues, fig.width = 2.7, fig.height = 1.85}
+genotype_palette <- c('WT' = "#377AA3", 'KO+L' = "mediumpurple2",
+                      'KO+S' = "darkorange1", 'KO+L3D'  = "#74A57F",
+                      'KO+S3D'= "#E8B4BC")
+
+ggplot(Meta_K27me3) +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~type, strip = Metaplot_coloured_strip,
+              labeller = labeller(type = strip_CGI_conversion) ) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = 0.1), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.025), add = 0 ) ) +
+  scale_colour_manual(values = genotype_palette,
+                      guide = guide_legend(reverse = TRUE) ) +
+  coord_cartesian(ylim = c(0, NA), clip = 'off' ) +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'Spike-in normalised H3K27me3 signal') +
+  profile_th -> pMetaPlot_CGI_H3K27me3_Rescues
+pMetaPlot_CGI_H3K27me3_Rescues
+```
+
+Save to pdf.
+
+```{r, save figure S5 H3K27me3 rescue metagene profile}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("FigS5I_H3K27me3_Targeted_CGI_Metagene_Profiles_Rescue_Lines.pdf"),
+       plot = pMetaPlot_CGI_H3K27me3_Rescues, device = cairo_pdf, units = "cm",
+       width = 7.3, height = 4.7)
+```
+
 
 ## MTF2 signal at PRC2 targeted (or not) CpG Islands
 
@@ -854,14 +1906,14 @@ Import the files Enrique made for the targeted CGI for the MTF2 ChIP-seq.
 
 ```{r, import targeted CGI files MTF2}
 trgtd_MTF2_WT1 <- read_prfl(path_dir = round21_meta_dir,
-                                   txt_name = "M1A_GENEplot_5000/GENEprofile_M1A_5000.txt",
-                                   epitope = "MTF2", geneset_type = "PRC2 targeted CGI", 
-                                   sample_name = "WT1")
+                            txt_name = "M1A_GENEplot_5000/GENEprofile_M1A_5000.txt",
+                            epitope = "MTF2", geneset_type = "PRC2 targeted CGI", 
+                            sample_name = "WT1")
 
 trgtd_MTF2_WT2 <- read_prfl(path_dir = round21_meta_dir,
-                                   txt_name = "M2A_GENEplot_5000/GENEprofile_M2A_5000.txt",
-                                   epitope = "MTF2", geneset_type = "PRC2 targeted CGI", 
-                                   sample_name = "WT2")
+                            txt_name = "M2A_GENEplot_5000/GENEprofile_M2A_5000.txt",
+                            epitope = "MTF2", geneset_type = "PRC2 targeted CGI", 
+                            sample_name = "WT2")
 
 trgtd_MTF2_CSex4a <- read_prfl(path_dir = round21_meta_dir,
                                txt_name = "M3A_GENEplot_5000/GENEprofile_M3A_5000.txt",
@@ -893,34 +1945,34 @@ Import MTF2 signal at non-targeted CGI.
 
 ```{r, import non targeted CGI files MTF2}
 nontrgtd_MTF2_WT1 <- read_prfl(path_dir = round21_meta_dir,
-                                   txt_name = "M1B_GENEplot_5000/GENEprofile_M1B_5000.txt",
-                                   epitope = "MTF2", geneset_type = "Other CGI", 
-                                   sample_name = "WT1")
+                               txt_name = "M1B_GENEplot_5000/GENEprofile_M1B_5000.txt",
+                               epitope = "MTF2", geneset_type = "Other CGI", 
+                               sample_name = "WT1")
 
 nontrgtd_MTF2_WT2 <- read_prfl(path_dir = round21_meta_dir,
-                                   txt_name = "M2B_GENEplot_5000/GENEprofile_M2B_5000.txt",
-                                   epitope = "MTF2", geneset_type = "Other CGI", 
-                                   sample_name = "WT2")
+                               txt_name = "M2B_GENEplot_5000/GENEprofile_M2B_5000.txt",
+                               epitope = "MTF2", geneset_type = "Other CGI", 
+                               sample_name = "WT2")
 
 nontrgtd_MTF2_CSex4a <- read_prfl(path_dir = round21_meta_dir,
-                               txt_name = "M3B_GENEplot_5000/GENEprofile_M3B_5000.txt",
-                               epitope = "MTF2", geneset_type = "Other CGI", 
-                               sample_name = "CSex4a")
+                                  txt_name = "M3B_GENEplot_5000/GENEprofile_M3B_5000.txt",
+                                  epitope = "MTF2", geneset_type = "Other CGI", 
+                                  sample_name = "CSex4a")
 
 nontrgtd_MTF2_CSex4b <- read_prfl(path_dir = round21_meta_dir,
-                               txt_name = "M4B_GENEplot_5000/GENEprofile_M4B_5000.txt",
-                               epitope = "MTF2", geneset_type = "Other CGI", 
-                               sample_name = "CSex4b")
+                                  txt_name = "M4B_GENEplot_5000/GENEprofile_M4B_5000.txt",
+                                  epitope = "MTF2", geneset_type = "Other CGI", 
+                                  sample_name = "CSex4b")
 
 nontrgtd_MTF2_dex4a <- read_prfl(path_dir = round21_meta_dir,
-                              txt_name = "M5B_GENEplot_5000/GENEprofile_M5B_5000.txt",
-                              epitope = "MTF2", geneset_type = "Other CGI", 
-                              sample_name = "∆ex4a")
+                                 txt_name = "M5B_GENEplot_5000/GENEprofile_M5B_5000.txt",
+                                 epitope = "MTF2", geneset_type = "Other CGI", 
+                                 sample_name = "∆ex4a")
 
 nontrgtd_MTF2_dex4b <- read_prfl(path_dir = round21_meta_dir,
-                              txt_name = "M6B_GENEplot_5000/GENEprofile_M6B_5000.txt",
-                              epitope = "MTF2", geneset_type = "Other CGI", 
-                              sample_name = "∆ex4b")
+                                 txt_name = "M6B_GENEplot_5000/GENEprofile_M6B_5000.txt",
+                                 epitope = "MTF2", geneset_type = "Other CGI", 
+                                 sample_name = "∆ex4b")
 
 CGI_other_MTF2 <- rbind(nontrgtd_MTF2_WT1, nontrgtd_MTF2_WT2, 
                         nontrgtd_MTF2_CSex4a, nontrgtd_MTF2_CSex4b,
@@ -942,7 +1994,7 @@ Meta_MTF2 <- rbind(CGI_targeted_MTF2, CGI_other_MTF2) |>
   mutate(Genotype = factor(Genotype, levels = c('WT', 'CSex4', '∆ex4') ) ) |>
   mutate(Sample = factor(Sample, levels = c('WT1', 'WT2', 'CSex4a', 'CSex4b', '∆ex4a', '∆ex4b') ) ) |>
   mutate(MetaPosition = MetaPosition / 1000) |> # turn bases in kilo-bases
-# subset a small a fraction of the total.
+  # subset a small a fraction of the total.
   select(MetaPosition, type, Genotype, Average_Signal) |> 
   unique() |> sample_frac(size = 0.25) 
 ```
@@ -965,12 +2017,13 @@ ggplot(Meta_MTF2) +
   facet_wrap2( ~type, strip = Metaplot_coloured_strip,
               labeller = labeller(type = strip_CGI_conversion) ) +
   geom_line(linewidth = 0.5) +
-  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+  scale_x_continuous(expand = expansion(mult = 0, add = 0.1), 
                      breaks = c(-10, -5, 0, 5, 10) ) +
-  scale_y_continuous(expand = expansion(mult = 0.025, add = 0 ) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.025), add = 0 ) ) +
   scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0, NA), clip = 'on') +
   labs(x = 'Distance to CGI center (kb)', 
-       y = expression("Spike-in normalised MTF2 signal (" ~ log[10] ~ ")" )) +
+       y = 'Spike-in normalised MTF2 signal') +
   profile_th -> pMetaPlot_CGI_MTF2
 pMetaPlot_CGI_MTF2
 ```
@@ -979,16 +2032,41 @@ Save to pdf.
 
 ```{r, save figure 5 MTF2}
 ggsave(path = pdf_dir_fig5, 
-       filename = paste0("Fig5XYZ_MTF2_Targeted_CGI_Metagene_Profiles.pdf"),
+       filename = paste0("Fig5I_MTF2_Metagene_Profiles.pdf"),
        plot = pMetaPlot_CGI_MTF2, device = cairo_pdf, units = "cm",
        width = 7.3, height = 4.9)
 ```
 
+Save for main figure.
+
+```{r, save figure 5 MTF2 main panel, fig.width = 2.2, fig.height = 1.85}
+Meta_MTF2$Epitope <- 'MTF2'
+
+Meta_MTF2 |>
+  subset(type == 'PRC2 targeted CGI') |>
+  ggplot() +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~Epitope) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05), add = 0 ), n.breaks = 5 ) +
+  scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0, NA), xlim = c(-10, 10), clip = 'on') +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'Spike-in normalised signal at SUZ12 targeted CGI') +
+  profile_th +
+  theme(legend.position = c(0.85, 0.87)) -> pMetaPlot_MTF2
+pMetaPlot_MTF2
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5I_MTF2_Targeted_CGI_Metagene_Profiles.pdf"),
+       plot = pMetaPlot_MTF2, device = cairo_pdf, units = "cm",
+       width = 4, height = 4.9)
+```
+
 ## JARID2 signal at PRC2 targeted (or not) CpG Islands
 
-Metagene profile spike-in normalised.
-
-Import JARID2 targeted CGI signal
+Metagene profile of spike-in normalised JARID2 ChIP-seq.
 
 ```{r, import targeted CGI files JARID2}
 trgtd_JARID2_WT1 <- read_prfl(path_dir = round21_meta_dir,
@@ -1041,9 +2119,9 @@ nontrgtd_JARID2_WT2 <- read_prfl(path_dir = round21_meta_dir,
                                    sample_name = "WT2")
 
 nontrgtd_JARID2_CSex4a <- read_prfl(path_dir = round21_meta_dir,
-                               txt_name = "J3B_GENEplot_5000/GENEprofile_J3B_5000.txt",
-                               epitope = "JARID2", geneset_type = "Other CGI", 
-                               sample_name = "CSex4a")
+                                   txt_name = "J3B_GENEplot_5000/GENEprofile_J3B_5000.txt",
+                                   epitope = "JARID2", geneset_type = "Other CGI", 
+                                   sample_name = "CSex4a")
 
 nontrgtd_JARID2_CSex4b <- read_prfl(path_dir = round21_meta_dir,
                                txt_name = "J4B_GENEplot_5000/GENEprofile_J4B_5000.txt",
@@ -1085,7 +2163,7 @@ Meta_JARID2 <- rbind(CGI_targeted_JARID2, CGI_other_JARID2) |>
   unique() |> sample_frac(size = 0.25) 
 ```
 
-Plot JARID2 profile
+Plot JARID2 profile.
 
 ```{r, plot figure 5 JARID2, fig.width = 2.7, fig.height = 1.85}
 ggplot(Meta_JARID2) +
@@ -1095,10 +2173,11 @@ ggplot(Meta_JARID2) +
   geom_line(linewidth = 0.5) +
   scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
                      breaks = c(-10, -5, 0, 5, 10) ) +
-  scale_y_continuous(expand = expansion(mult = 0.025, add = 0 ) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.025), add = 0 ) ) +
   scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0, NA), clip = 'on') +
   labs(x = 'Distance to CGI center (kb)', 
-       y = expression("Spike-in normalised JARID2 signal (" ~ log[10] ~ ")" )) +
+       y = 'Spike-in normalised JARID2 signal') +
   profile_th -> pMetaPlot_CGI_JARID2
 pMetaPlot_CGI_JARID2
 ```
@@ -1107,280 +2186,684 @@ Save to pdf.
 
 ```{r, save figure 5 JARID2}
 ggsave(path = pdf_dir_fig5, 
-       filename = paste0("Fig5XYZ_JARID2_Targeted_CGI_Metagene_Profiles.pdf"),
+       filename = paste0("Fig5H_JARID2_Metagene_Profiles.pdf"),
        plot = pMetaPlot_CGI_JARID2, device = cairo_pdf, units = "cm",
        width = 7.3, height = 4.9)
 ```
 
+Save for main figure.
+
+```{r, save figure 5 JARID2 main panel, fig.width = 2.2, fig.height = 1.85}
+Meta_JARID2$Epitope <- 'JARID2'
+
+Meta_JARID2 |>
+  subset(type == 'PRC2 targeted CGI') |>
+  ggplot() +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~Epitope) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05), add = 0 ), n.breaks = 5 ) +
+  scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0, NA), xlim = c(-10, 10),clip = 'on') +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'Spike-in normalised signal at SUZ12 targeted CGI') +
+  profile_th +
+  theme(legend.position = c(0.85, 0.87)) -> pMetaPlot_JARID2
+pMetaPlot_JARID2
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5H_JARID2_Targeted_CGI_Metagene_Profiles.pdf"),
+       plot = pMetaPlot_JARID2, device = cairo_pdf, units = "cm",
+       width = 4, height = 4.9)
+```
 
 ## AEBP2 signal at PRC2 targeted (or not) CpG Islands
 
-### Metagene profile not spike-in normalised
+Import AEBP2 targeted CGI signal not spike-in normalised for metagene profile
+
+```{r, import targeted CGI files AEBP2}
+trgtd_AEBP2_WT1 <- read_prfl(path_dir = round21_meta_dir,
+                             txt_name = "nA1A_GENEplot_5000/GENEprofile_nA1A_5000.txt",
+                             epitope = "AEBP2", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "WT1")
+
+trgtd_AEBP2_WT2 <- read_prfl(path_dir = round21_meta_dir,
+                             txt_name = "nA2A_GENEplot_5000/GENEprofile_nA2A_5000.txt",
+                             epitope = "AEBP2", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "WT2")
+
+trgtd_AEBP2_CSex4a <- read_prfl(path_dir = round21_meta_dir,
+                                txt_name = "nA3A_GENEplot_5000/GENEprofile_nA3A_5000.txt",
+                                epitope = "AEBP2", geneset_type = "PRC2 targeted CGI", 
+                                sample_name = "CSex4a")
+
+trgtd_AEBP2_CSex4b <- read_prfl(path_dir = round21_meta_dir,
+                                txt_name = "nA4A_GENEplot_5000/GENEprofile_nA4A_5000.txt",
+                                epitope = "AEBP2", geneset_type = "PRC2 targeted CGI", 
+                                sample_name = "CSex4b")
+
+trgtd_AEBP2_dex4a <- read_prfl(path_dir = round21_meta_dir,
+                               txt_name = "nA5A_GENEplot_5000/GENEprofile_nA5A_5000.txt",
+                               epitope = "AEBP2", geneset_type = "PRC2 targeted CGI", 
+                               sample_name = "∆ex4a")
+
+trgtd_AEBP2_dex4b <- read_prfl(path_dir = round21_meta_dir,
+                               txt_name = "nA6A_GENEplot_5000/GENEprofile_nA6A_5000.txt",
+                               epitope = "AEBP2", geneset_type = "PRC2 targeted CGI", 
+                               sample_name = "∆ex4b")
+
+CGI_targeted_AEBP2 <- rbind(trgtd_AEBP2_WT1, trgtd_AEBP2_WT2, 
+                            trgtd_AEBP2_CSex4a, trgtd_AEBP2_CSex4b,
+                            trgtd_AEBP2_dex4a, trgtd_AEBP2_dex4b) |>
+  as_tibble()
+```
+
+Import AEBP2 signal at non-targeted CGI.
+
+```{r, import non targeted CGI files AEBP2}
+nontrgtd_AEBP2_WT1 <- read_prfl(path_dir = round21_meta_dir,
+                                txt_name = "nA1B_GENEplot_5000/GENEprofile_nA1B_5000.txt",
+                                epitope = "AEBP2", geneset_type = "Other CGI", 
+                                sample_name = "WT1")
+
+nontrgtd_AEBP2_WT2 <- read_prfl(path_dir = round21_meta_dir,
+                                txt_name = "nA2B_GENEplot_5000/GENEprofile_nA2B_5000.txt",
+                                epitope = "AEBP2", geneset_type = "Other CGI", 
+                                sample_name = "WT2")
+
+nontrgtd_AEBP2_CSex4a <- read_prfl(path_dir = round21_meta_dir,
+                                   txt_name = "nA3B_GENEplot_5000/GENEprofile_nA3B_5000.txt",
+                                   epitope = "AEBP2", geneset_type = "Other CGI", 
+                                   sample_name = "CSex4a")
+
+nontrgtd_AEBP2_CSex4b <- read_prfl(path_dir = round21_meta_dir,
+                                   txt_name = "nA4B_GENEplot_5000/GENEprofile_nA4B_5000.txt",
+                                   epitope = "AEBP2", geneset_type = "Other CGI", 
+                                   sample_name = "CSex4b")
+
+nontrgtd_AEBP2_dex4a <- read_prfl(path_dir = round21_meta_dir,
+                                  txt_name = "nA5B_GENEplot_5000/GENEprofile_nA5B_5000.txt",
+                                  epitope = "AEBP2", geneset_type = "Other CGI", 
+                                  sample_name = "∆ex4a")
+
+nontrgtd_AEBP2_dex4b <- read_prfl(path_dir = round21_meta_dir,
+                                  txt_name = "nA6B_GENEplot_5000/GENEprofile_nA6B_5000.txt",
+                                  epitope = "AEBP2", geneset_type = "Other CGI", 
+                                  sample_name = "∆ex4b")
+
+CGI_other_AEBP2 <- rbind(nontrgtd_AEBP2_WT1, nontrgtd_AEBP2_WT2, 
+                         nontrgtd_AEBP2_CSex4a, nontrgtd_AEBP2_CSex4b,
+                         nontrgtd_AEBP2_dex4a, nontrgtd_AEBP2_dex4b) |>
+  as_tibble()
+```
+
+Combine data and reshape it for plotting.
+
+```{r, tidy data of AEBP2 for meta gene profiles plot}
+Meta_AEBP2 <- rbind(CGI_targeted_AEBP2, CGI_other_AEBP2) |>
+  mutate(MetaPosition = MetaPosition - 5000) |>
+  mutate(Genotype = str_remove(pattern = "[a1-z9]$", string = Sample)) |>
+  mutate(type = factor(type, levels = c("PRC2 targeted CGI", "Other CGI") )) |>
+  group_by(Genotype, type, MetaPosition) |>
+  mutate(Average_Signal = mean(AEBP2_signal, na.rm = T) )|>
+  arrange(MetaPosition) |>
+  ungroup() |>
+  mutate(Genotype = factor(Genotype, levels = c('WT', 'CSex4', '∆ex4') ) ) |>
+  mutate(Sample = factor(Sample, levels = c('WT1', 'WT2', 'CSex4a', 'CSex4b', '∆ex4a', '∆ex4b') ) ) |>
+  mutate(MetaPosition = MetaPosition / 1000) |> # turn bases in kilo-bases
+  # subset a small a fraction of the total.
+  select(MetaPosition, type, Genotype, Average_Signal) |> 
+  unique() |> sample_frac(size = 0.25) 
+```
+
+Plot AEBP2 profile
+
+```{r, plot figure 5 AEBP2, fig.width = 2.7, fig.height = 1.85}
+genotype_palette <- c('WT' = "#377AA3", 'CSex4' = "#B65120", '∆ex4' = "#F7CB48")
+ggplot(Meta_AEBP2) +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~type, strip = Metaplot_coloured_strip,
+              labeller = labeller(type = strip_CGI_conversion) ) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05), add = 0 ), n.breaks = 3 ) +
+  scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0.05, 0.15), clip = 'on') +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'AEBP2 ChIP-seq signal') +
+  profile_th -> pMetaPlot_CGI_AEBP2
+pMetaPlot_CGI_AEBP2
+```
+
+Save to pdf.
+
+```{r, save figure 5 AEBP2}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("FigS5J_AEBP2_Metagene_Profiles.pdf"),
+       plot = pMetaPlot_CGI_AEBP2, device = cairo_pdf, units = "cm",
+       width = 6.7, height = 4.7)
+```
+
+Plot for supplementary figure
+
+```{r, save figure 5 AEBP2 main panel, fig.width = 2.2, fig.height = 1.85}
+Meta_AEBP2$Epitope <- 'AEBP2'
+
+Meta_AEBP2 |>
+  subset(type == 'PRC2 targeted CGI') |>
+  ggplot() +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~Epitope) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05), add = 0 ), n.breaks = 3 ) +
+  scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0.05, 0.15), clip = 'on') +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'ChIP-seq signal at SUZ12 targeted CGI') +
+  profile_th +
+  theme(legend.position = c(0.85, 0.87)) -> pMetaPlot_AEBP2
+pMetaPlot_AEBP2
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("FigS5J_AEBP2_Targeted_CGI_Metagene_Profiles.pdf"),
+       plot = pMetaPlot_AEBP2, device = cairo_pdf, units = "cm",
+       width = 4, height = 4.9)
+```
 
 ## RING1B signal at PRC2 targeted (or not) CpG Islands
 
-### Metagene profile not spike-in normalised
+Import RING1B targeted CGI signal not spike-in normalised for metagene profile
 
-## H2Aub1 signal at PRC2 targeted (or not) CpG Islands
+```{r, import targeted CGI files RING1B}
+trgtd_RING1B_WT1 <- read_prfl(path_dir = round21_meta_dir,
+                              txt_name = "nR1A_GENEplot_5000/GENEprofile_nR1A_5000.txt",
+                              epitope = "RING1B", geneset_type = "PRC2 targeted CGI", 
+                              sample_name = "WT1")
 
-### Metagene profile not spike-in normalised
+trgtd_RING1B_WT2 <- read_prfl(path_dir = round21_meta_dir,
+                              txt_name = "nR2A_GENEplot_5000/GENEprofile_nR2A_5000.txt",
+                              epitope = "RING1B", geneset_type = "PRC2 targeted CGI", 
+                              sample_name = "WT2")
+
+trgtd_RING1B_CSex4a <- read_prfl(path_dir = round21_meta_dir,
+                                 txt_name = "nR3A_GENEplot_5000/GENEprofile_nR3A_5000.txt",
+                                 epitope = "RING1B", geneset_type = "PRC2 targeted CGI", 
+                                 sample_name = "CSex4a")
+
+trgtd_RING1B_CSex4b <- read_prfl(path_dir = round21_meta_dir,
+                                 txt_name = "nR4A_GENEplot_5000/GENEprofile_nR4A_5000.txt",
+                                 epitope = "RING1B", geneset_type = "PRC2 targeted CGI", 
+                                 sample_name = "CSex4b")
+
+trgtd_RING1B_dex4a <- read_prfl(path_dir = round21_meta_dir,
+                                txt_name = "nR5A_GENEplot_5000/GENEprofile_nR5A_5000.txt",
+                                epitope = "RING1B", geneset_type = "PRC2 targeted CGI", 
+                                sample_name = "∆ex4a")
+
+trgtd_RING1B_dex4b <- read_prfl(path_dir = round21_meta_dir,
+                                txt_name = "nR6A_GENEplot_5000/GENEprofile_nR6A_5000.txt",
+                                epitope = "RING1B", geneset_type = "PRC2 targeted CGI", 
+                                sample_name = "∆ex4b")
+
+CGI_targeted_RING1B <- rbind(trgtd_RING1B_WT1, trgtd_RING1B_WT2, 
+                             trgtd_RING1B_CSex4a, trgtd_RING1B_CSex4b,
+                             trgtd_RING1B_dex4a, trgtd_RING1B_dex4b) |>
+  as_tibble()
+```
+
+Import RING1B signal at non-targeted CGI.
+
+```{r, import non targeted CGI files RING1B}
+nontrgtd_RING1B_WT1 <- read_prfl(path_dir = round21_meta_dir,
+                                 txt_name = "nR1B_GENEplot_5000/GENEprofile_nR1B_5000.txt",
+                                 epitope = "RING1B", geneset_type = "Other CGI", 
+                                 sample_name = "WT1")
+
+nontrgtd_RING1B_WT2 <- read_prfl(path_dir = round21_meta_dir,
+                                 txt_name = "nR2B_GENEplot_5000/GENEprofile_nR2B_5000.txt",
+                                 epitope = "RING1B", geneset_type = "Other CGI", 
+                                 sample_name = "WT2")
+
+nontrgtd_RING1B_CSex4a <- read_prfl(path_dir = round21_meta_dir,
+                                    txt_name = "nR3B_GENEplot_5000/GENEprofile_nR3B_5000.txt",
+                                    epitope = "RING1B", geneset_type = "Other CGI", 
+                                    sample_name = "CSex4a")
+
+nontrgtd_RING1B_CSex4b <- read_prfl(path_dir = round21_meta_dir,
+                                    txt_name = "nR4B_GENEplot_5000/GENEprofile_nR4B_5000.txt",
+                                    epitope = "RING1B", geneset_type = "Other CGI", 
+                                    sample_name = "CSex4b")
+
+nontrgtd_RING1B_dex4a <- read_prfl(path_dir = round21_meta_dir,
+                                   txt_name = "nR5B_GENEplot_5000/GENEprofile_nR5B_5000.txt",
+                                   epitope = "RING1B", geneset_type = "Other CGI", 
+                                   sample_name = "∆ex4a")
+
+nontrgtd_RING1B_dex4b <- read_prfl(path_dir = round21_meta_dir,
+                                   txt_name = "nR6B_GENEplot_5000/GENEprofile_nR6B_5000.txt",
+                                   epitope = "RING1B", geneset_type = "Other CGI", 
+                                   sample_name = "∆ex4b")
+
+CGI_other_RING1B <- rbind(nontrgtd_RING1B_WT1, nontrgtd_RING1B_WT2, 
+                         nontrgtd_RING1B_CSex4a, nontrgtd_RING1B_CSex4b,
+                         nontrgtd_RING1B_dex4a, nontrgtd_RING1B_dex4b) |>
+  as_tibble()
+```
+
+Combine data and reshape it for plotting.
+
+```{r, tidy data of RING1B for meta gene profiles plot}
+Meta_RING1B <- rbind(CGI_targeted_RING1B, CGI_other_RING1B) |>
+  mutate(MetaPosition = MetaPosition - 5000) |>
+  mutate(Genotype = str_remove(pattern = "[a1-z9]$", string = Sample)) |>
+  mutate(type = factor(type, levels = c("PRC2 targeted CGI", "Other CGI") )) |>
+  group_by(Genotype, type, MetaPosition) |>
+  mutate(Average_Signal = mean(RING1B_signal, na.rm = T) )|>
+  arrange(MetaPosition) |>
+  ungroup() |>
+  mutate(Genotype = factor(Genotype, levels = c('WT', 'CSex4', '∆ex4') ) ) |>
+  mutate(Sample = factor(Sample, levels = c('WT1', 'WT2', 'CSex4a', 'CSex4b', '∆ex4a', '∆ex4b') ) ) |>
+  mutate(MetaPosition = MetaPosition / 1000) |> # turn bases in kilo-bases
+  # subset a small a fraction of the total.
+  select(MetaPosition, type, Genotype, Average_Signal) |> 
+  unique() |> sample_frac(size = 0.25) 
+```
+
+Plot RING1B profile
+
+```{r, plot figure 5 RING1B, fig.width = 2.7, fig.height = 1.85}
+ggplot(Meta_RING1B) +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~type, strip = Metaplot_coloured_strip,
+              labeller = labeller(type = strip_CGI_conversion) ) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05), add = 0 ) ) +
+  scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0.06, NA), clip = 'on') +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'RING1B ChIP-seq signal') +
+  profile_th -> pMetaPlot_CGI_RING1B
+pMetaPlot_CGI_RING1B
+```
+
+Save to pdf.
+
+```{r, save figure 5 RING1B}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5J_RING1B_Metagene_Profiles.pdf"),
+       plot = pMetaPlot_CGI_RING1B, device = cairo_pdf, units = "cm",
+       width = 7.3, height = 4.9)
+```
+
+Plot for main figure
+
+```{r, save figure 5 RING1B main panel, fig.width = 2.2, fig.height = 1.85}
+Meta_RING1B$Epitope <- 'RING1B'
+
+Meta_RING1B |>
+  subset(type == 'PRC2 targeted CGI') |>
+  ggplot() +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~Epitope) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05), add = 0 ), n.breaks = 6 ) +
+  scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0.05, 0.32), xlim = c(-10, 10), clip = 'on') +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'ChIP-seq signal at SUZ12 targeted CGI') +
+  profile_th +
+  theme(legend.position = c(0.85, 0.87)) -> pMetaPlot_RING1B
+pMetaPlot_RING1B
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5J_RING1B_Targeted_CGI_Metagene_Profiles.pdf"),
+       plot = pMetaPlot_RING1B, device = cairo_pdf, units = "cm",
+       width = 4, height = 4.9)
+```
+
+## H2Aub signal at PRC2 targeted (or not) CpG Islands
+
+Import H2Aub targeted CGI signal not spike-in normalised for metagene profile
+
+```{r, import targeted CGI files H2Aub}
+trgtd_H2Aub_WT1 <- read_prfl(path_dir = round21_meta_dir,
+                             txt_name = "nU1A_GENEplot_5000/GENEprofile_nU1A_5000.txt",
+                             epitope = "H2Aub", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "WT1")
+
+trgtd_H2Aub_WT2 <- read_prfl(path_dir = round21_meta_dir,
+                             txt_name = "nU2A_GENEplot_5000/GENEprofile_nU2A_5000.txt",
+                             epitope = "H2Aub", geneset_type = "PRC2 targeted CGI", 
+                             sample_name = "WT2")
+
+trgtd_H2Aub_CSex4a <- read_prfl(path_dir = round21_meta_dir,
+                                txt_name = "nU3A_GENEplot_5000/GENEprofile_nU3A_5000.txt",
+                                epitope = "H2Aub", geneset_type = "PRC2 targeted CGI", 
+                                sample_name = "CSex4a")
+
+trgtd_H2Aub_CSex4b <- read_prfl(path_dir = round21_meta_dir,
+                                txt_name = "nU4A_GENEplot_5000/GENEprofile_nU4A_5000.txt",
+                                epitope = "H2Aub", geneset_type = "PRC2 targeted CGI", 
+                                sample_name = "CSex4b")
+
+trgtd_H2Aub_dex4a <- read_prfl(path_dir = round21_meta_dir,
+                               txt_name = "nU5A_GENEplot_5000/GENEprofile_nU5A_5000.txt",
+                               epitope = "H2Aub", geneset_type = "PRC2 targeted CGI", 
+                               sample_name = "∆ex4a")
+
+trgtd_H2Aub_dex4b <- read_prfl(path_dir = round21_meta_dir,
+                               txt_name = "nU6A_GENEplot_5000/GENEprofile_nU6A_5000.txt",
+                               epitope = "H2Aub", geneset_type = "PRC2 targeted CGI", 
+                               sample_name = "∆ex4b")
+
+CGI_targeted_H2Aub <- rbind(trgtd_H2Aub_WT1, trgtd_H2Aub_WT2, 
+                            trgtd_H2Aub_CSex4a, trgtd_H2Aub_CSex4b,
+                            trgtd_H2Aub_dex4a, trgtd_H2Aub_dex4b) |>
+  as_tibble()
+```
+
+Import H2Aub signal at non-targeted CGI.
+
+```{r, import non targeted CGI files H2Aub}
+nontrgtd_H2Aub_WT1 <- read_prfl(path_dir = round21_meta_dir,
+                                 txt_name = "nU1B_GENEplot_5000/GENEprofile_nU1B_5000.txt",
+                                 epitope = "H2Aub", geneset_type = "Other CGI", 
+                                 sample_name = "WT1")
+
+nontrgtd_H2Aub_WT2 <- read_prfl(path_dir = round21_meta_dir,
+                                 txt_name = "nU2B_GENEplot_5000/GENEprofile_nU2B_5000.txt",
+                                 epitope = "H2Aub", geneset_type = "Other CGI", 
+                                 sample_name = "WT2")
+
+nontrgtd_H2Aub_CSex4a <- read_prfl(path_dir = round21_meta_dir,
+                                    txt_name = "nU3B_GENEplot_5000/GENEprofile_nU3B_5000.txt",
+                                    epitope = "H2Aub", geneset_type = "Other CGI", 
+                                    sample_name = "CSex4a")
+
+nontrgtd_H2Aub_CSex4b <- read_prfl(path_dir = round21_meta_dir,
+                                    txt_name = "nU4B_GENEplot_5000/GENEprofile_nU4B_5000.txt",
+                                    epitope = "H2Aub", geneset_type = "Other CGI", 
+                                    sample_name = "CSex4b")
+
+nontrgtd_H2Aub_dex4a <- read_prfl(path_dir = round21_meta_dir,
+                                   txt_name = "nU5B_GENEplot_5000/GENEprofile_nU5B_5000.txt",
+                                   epitope = "H2Aub", geneset_type = "Other CGI", 
+                                   sample_name = "∆ex4a")
+
+nontrgtd_H2Aub_dex4b <- read_prfl(path_dir = round21_meta_dir,
+                                   txt_name = "nU6B_GENEplot_5000/GENEprofile_nU6B_5000.txt",
+                                   epitope = "H2Aub", geneset_type = "Other CGI", 
+                                   sample_name = "∆ex4b")
+
+CGI_other_H2Aub <- rbind(nontrgtd_H2Aub_WT1, nontrgtd_H2Aub_WT2, 
+                         nontrgtd_H2Aub_CSex4a, nontrgtd_H2Aub_CSex4b,
+                         nontrgtd_H2Aub_dex4a, nontrgtd_H2Aub_dex4b) |>
+  as_tibble()
+```
+
+Combine data and reshape it for plotting.
+
+```{r, tidy data of H2Aub for meta gene profiles plot}
+Meta_H2Aub <- rbind(CGI_targeted_H2Aub, CGI_other_H2Aub) |>
+  mutate(MetaPosition = MetaPosition - 5000) |>
+  mutate(Genotype = str_remove(pattern = "[a1-z9]$", string = Sample)) |>
+  mutate(type = factor(type, levels = c("PRC2 targeted CGI", "Other CGI") )) |>
+  group_by(Genotype, type, MetaPosition) |>
+  mutate(Average_Signal = mean(H2Aub_signal, na.rm = T) )|>
+  arrange(MetaPosition) |>
+  ungroup() |>
+  mutate(Genotype = factor(Genotype, levels = c('WT', 'CSex4', '∆ex4') ) ) |>
+  mutate(Sample = factor(Sample, levels = c('WT1', 'WT2', 'CSex4a', 'CSex4b', '∆ex4a', '∆ex4b') ) ) |>
+  mutate(MetaPosition = MetaPosition / 1000) |> # turn bases in kilo-bases
+  # subset a small a fraction of the total.
+  select(MetaPosition, type, Genotype, Average_Signal) |> 
+  unique() |> sample_frac(size = 0.25) 
+```
+
+Plot H2Aub profile
+
+```{r, plot figure 5 H2Aub, fig.width = 2.7, fig.height = 1.85}
+ggplot(Meta_H2Aub) +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~type, strip = Metaplot_coloured_strip,
+              labeller = labeller(type = strip_CGI_conversion) ) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05), add = 0 ) ) +
+  scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0.025, NA), clip = 'on') +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'H2AK119ub ChIP-seq signal') +
+  profile_th -> pMetaPlot_CGI_H2Aub
+pMetaPlot_CGI_H2Aub
+```
+
+Save to pdf.
+
+```{r, save figure 5 H2Aub}
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5K_H2AK119ub_Metagene_Profiles.pdf"),
+       plot = pMetaPlot_CGI_H2Aub, device = cairo_pdf, units = "cm",
+       width = 7.3, height = 4.9)
+```
+
+Plot for main figure
+
+```{r, save figure 5 H2AK119ub main panel, fig.width = 2.2, fig.height = 1.85}
+Meta_H2Aub$Epitope <- 'H2AK119ub'
+
+Meta_H2Aub |>
+  subset(type == 'PRC2 targeted CGI') |>
+  ggplot() +
+  aes(x = MetaPosition, y = Average_Signal, colour = Genotype) +
+  facet_wrap2( ~Epitope) +
+  geom_line(linewidth = 0.5) +
+  scale_x_continuous(expand = expansion(mult = 0, add = c(0, 0.1) ), 
+                     breaks = c(-10, -5, 0, 5, 10) ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05), add = 0 ), n.breaks = 6 ) +
+  scale_colour_manual(values = genotype_palette ) +
+  coord_cartesian(ylim = c(0.05, 0.32), clip = 'on') +
+  labs(x = 'Distance to CGI center (kb)', 
+       y = 'ChIP-seq signal at SUZ12 targeted CGI') +
+  profile_th +
+  theme(legend.position = c(0.85, 0.87)) -> pMetaPlot_CGI_H2Aub
+pMetaPlot_CGI_H2Aub
+ggsave(path = pdf_dir_fig5, 
+       filename = paste0("Fig5K_H2AK119ub_Targeted_CGI_Metagene_Profiles.pdf"),
+       plot = pMetaPlot_CGI_H2Aub, device = cairo_pdf, units = "cm",
+       width = 4, height = 4.9)
+```
 
 # Supplementary Figure Panels
 
 ## Venn diagram SUZ12 peaks
 
-Needed to be better shown for reviewer #1 major point #7
+Check the overlap of the genes that contain a peak of SUZ12 in their promoter.
+
+```{r, import gene names of SUZ12 targets}
+CSex4 <- read.table(file.path(round3_suz12_peaks_dir, "Suz12_100.txt"))$V1
+WT_1 <- read.table(file.path(round3_suz12_peaks_dir, "Suz12_WT1.txt"))$V1
+WT_2 <- read.table(file.path(round3_suz12_peaks_dir, "Suz12_WT2.txt"))$V1
+dEx4_1 <- read.table(file.path(round3_suz12_peaks_dir, "Suz12_KO1.txt"))$V1
+dEx4_2 <- read.table(file.path(round3_suz12_peaks_dir, "Suz12_KO2.txt"))$V1
+
+WT <- WT_1[WT_1%in%WT_2]
+dEx4 <- dEx4_1[dEx4_1%in%dEx4_2]
+
+message("Num of genes with SUZ12 peaks:\nWT#1:\t", length(WT_1), '\nWT#2:\t', length(WT_2), 
+        '\nWT shared: ', length(WT),
+        '\n∆ex4#1:\t', length(dEx4_1), '\n∆ex4#2:\t', length(dEx4_2), '\n∆ex4 shared: ', length(dEx4),
+        '\nCSex4:\t', length(CSex4))
+```
+
+Save to pdf the peaks overlap as venn diagram
+
+```{r, make venn diagram SUZ12 peaks, message = FALSE, echo = T, eval = FALSE}
+draw.venn( WT,CSex4,dEx4,
+          title = "SUZ12 target overlap",
+          subtitle = "",
+          nrtype = "pct",
+          # t_f = "Arial",
+          xtitle = "WT", #xt_f = "Arial",
+          ytitle = "CSex4", #yt_f = "Arial",
+          ztitle = "∆ex4", #zt_f = "Arial",
+          x_c = "#377AA3", y_c = "#B65120", z_c = "#F7CB48", 
+          #nr_f = "Arial", 
+          nr_fb = 1, 
+          output = 'pdf', width = 500, height = 500, 
+          filename = file.path(pdf_dir_fig5, 'FigS5A_SUZ12_targets_VennDiagram.pdf') )
+```
+
+Now do the same for H3K27me3
+
+```{r, import gene names of H3K27me3 targets}
+CSex4 <- read.table(file.path(round2_h3k27me3_peaks_dir, "H3K27me3_100.txt"))$V1
+WT_1 <- read.table(file.path(round2_h3k27me3_peaks_dir, "H3K27me3_WT1.txt"))$V1
+WT_2 <- read.table(file.path(round2_h3k27me3_peaks_dir, "H3K27me3_WT2.txt"))$V1
+dEx4_1 <- read.table(file.path(round2_h3k27me3_peaks_dir, "H3K27me3_KO1.txt"))$V1
+dEx4_2 <- read.table(file.path(round2_h3k27me3_peaks_dir, "H3K27me3_KO2.txt"))$V1
+
+WT <- WT_1[WT_1%in%WT_2]
+dEx4 <- dEx4_1[dEx4_1%in%dEx4_2]
+
+message("Num of genes with H3K27me3 peaks:\nWT#1:\t", length(WT_1), '\nWT#2:\t', length(WT_2), 
+        '\nWT shared: ', length(WT),
+        '\n∆ex4#1:\t', length(dEx4_1), '\n∆ex4#2:\t', length(dEx4_2), '\n∆ex4 shared: ', length(dEx4),
+        '\nCSex4:\t', length(CSex4))
+```
+
+Plot:
+```{r, save to pdf the venn diagram of the H3K27me3, message = FALSE, echo = T, eval = FALSE}
+draw.venn(WT,CSex4,dEx4,
+          title = "H3K27me3 target overlap",
+          subtitle = "", nrtype = "pct",
+          xtitle = "WT", #xt_f = "Arial",
+          ytitle = "CSex4", #yt_f = "Arial",
+          ztitle = "∆ex4", #zt_f = "Arial",
+          x_c = "#377AA3", y_c = "#B65120", z_c = "#F7CB48", 
+          #nr_f = "Arial", 
+          nr_fb = 1, 
+          output = 'pdf', width = 500, height = 500, 
+          filename = file.path(pdf_dir_fig5, 'FigS5A_H3K27me3_targets_VennDiagram.pdf'))
+```
 
 ## ChIP-qPCR controls
+
+```{r}
+genotype_palette <- c('WT' = "#377AA3", 'CSex4' = "#B65120", '∆ex4' = "#F7CB48", 'KO' = "#728189")
+ChIP_qPCR_dir <- file.path(oneDrive_Dir, '11_ChIP/ZChIP_test2')
+qPCR_path <- list.files(ChIP_qPCR_dir, pattern = '210603_ZChIP_test2.xlsx', full.names = T)
+```
+
+```{r}
+WT_samples <- c("WTp", "WT#2")
+CSex4_samples <- c("CSex4")
+dEx4_samples <- c("∆ex4#2", "∆ex4#3")
+KO_samples <- c("KO#1", "KO#2")
+```
+
+```{r}
+data <- read_excel(qPCR_path, sheet = "melt")
+# fix old name
+data <- data |>
+  mutate(Sample = ifelse(Sample == 'WT4C', yes = 'CSex4', no = Sample)) 
+data <- data |>
+  mutate(Genotype = case_when(Sample %in% WT_samples ~ 'WT',
+                              Sample %in% CSex4_samples ~ 'CSex4',
+                              Sample %in% dEx4_samples ~ '∆ex4',
+                              Sample %in% KO_samples ~ 'KO') ) |>
+  mutate(Genotype = factor(Genotype, levels = c('WT', 'CSex4', '∆ex4','KO') ) ) |>
+  mutate(Sample = factor(Sample, levels = unique(data$Sample) ) ) |>
+  mutate(Gene = factor(Gene, levels = c("Gsc","Hoxd13","Nes","T (Bra)","Actb","Sox2") ) )
+```
+
+Calculate avg for barplot
+```{r}
+avg <- data %>% 
+  group_by(Gene, Sample, Genotype) %>% 
+  summarise(value = mean(value), .groups = 'keep')
+```
+
+Plot ChIP-qPCR
+```{r, fig.width = 2.25, fig.height = 1.85}
+ggplot(data)+
+  aes(x=Sample, y=value, fill = Genotype) +
+  facet_grid(~Gene)+
+  geom_col(data = avg, show.legend = F, width = 0.95 )+
+  geom_point(size = 1, shape = 21, stroke = 0.2)+
+  scale_fill_manual(values = genotype_palette ) +
+  scale_x_discrete(labels = c('WT', '', 'CSex4', '', '∆ex4', '', 'KO')) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.02), add = 0)) +
+  labs(y = "% of input") +
+  theme_classic(base_size = 6, base_family = 'Arial') +
+  theme(legend.position = c(0.92, 0.85),
+        legend.background = element_blank(),
+        legend.title = element_blank(),
+        legend.key = element_blank(),
+        legend.key.size = unit(1, 'mm'),
+        legend.text = element_text(margin = margin(l = -1)),
+        panel.grid.major.y = element_line(linewidth = 0.2),
+        axis.text = element_text(colour = 'black'),
+        axis.text.x = element_text(angle = 45, hjust = 1, margin = margin(t = -1, unit = 'mm')),
+        axis.title = element_text(size = 5, colour = 'black'),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(margin = margin(r = 0)),
+        axis.ticks.length = unit(x = 1, units = 'mm'),
+        axis.ticks.x = element_blank(),
+        axis.line = element_line(linewidth = 0.2),
+        strip.background = element_blank(),
+        panel.background = element_blank(),
+        plot.background = element_blank()) -> p_ChIP_qCPR
+p_ChIP_qCPR
+```
+
+```{r}
+ggsave(filename = 'FigS5C_ChIP_qPCR_PRC2_targets.pdf', 
+       path = pdf_dir_fig5, plot = p_ChIP_qCPR,
+       device = cairo_pdf, units = 'mm', width = 60, height = 50)
+```
 
 ## Individual replicates metagene profiles without spike-in normalisation
 
 ## Spie chart distribution H3K27me3 in ∆ex4 ESCs.
 
-## Amniota Testes H3K27me3 re-analysis
+Spie chart of the percentage distribution of H3K27me3 peaks in ∆ex4 ESCs. The radial increase corresponds to the fold-change relative to WT ESCs.
 
-Brief overview of the analysis using `bwa` for mapping the reads, `macs2` to call the peaks, and `deeptools` to make bigwigs from bam files and calculate a metagene profile the matrix at the peaks.
+Code from Ivano's script
 
-Fastq files alignment:
-```{bash, bwa mapping, eval = F}
-bwa mem -t $Num_Processes -M -Y -K 100000000 \
-  -R ${read_group_header} -T 30 \
-  -o ${SAM_DIR}/${full_sample_name}.sam ${BWA_SPECIES_INDX_DIR}/${SPECIES_GENOME_ASSEMBLY}_gDNA_bwtsw_indx ${READ_INPUT}
+```{r, spie chart, fig.width = 4, fig.height = 4}
+# WT vs genome
+x <- c(3100,2677,278)
+y <- c(4661,3143,1248)
+percentX <-x/sum(x)
+percentY <-y/sum(y)
+percentY <- (percentX/percentY)/sum(percentX/percentY)
+names(percentX) <- c("Promoter","Genic","Intergenic")
+names(percentY) <- names(percentX)
+spie(percentY, percentX, multi = c(0.5, 1, 1.5), lwd = 1,
+     pie.labs = TRUE, grid = TRUE, grid.labs = TRUE, scale = TRUE, p1.circle = TRUE,
+     bg = c(NA, NA, NA),
+     col = c("thistle","palegreen","#728189") )
 ```
 
-Sam files convertion to bam files, with filtering of non primary alignments.
+Save to pdf.
 
-```{bash, filter sams, eval = F}
-samtools view -@ $Num_Processes --with-header --exclude-flags 0x0100 ${file_name} | \
-  samtools sort -@ $Num_Processes --output-fmt BAM --verbosity 4 -m 24G -l 1 \
-    -T ${sample_target_id} --output-fmt BAM -o ${full_sample_name}_pa_srtd.bam -
+```{r, save spie chart}
+cairo_pdf(file = file.path(pdf_dir_fig5, 'FigS5E_H3K27me3_peaks_location_SpieChart.pdf'), 
+          width = 4, height = 4)
+spie(percentY, percentX, multi = c(0.5, 1, 1.5), lwd = 1,
+     pie.labs = TRUE, grid = TRUE, grid.labs = TRUE, scale = TRUE, p1.circle = TRUE,
+     bg = c(NA, NA, NA),
+     col = c("thistle","palegreen","#728189") ) 
+dev.off()
 ```
-
-Mark duplicated reads
-
-```{bash, mark dups, eval = F}
-picard MarkDuplicates \
-                I=${file} \
-                O=${MRKD_DUPS_BAM} \
-                M=${MTRCS_FILE} \
-                ASSUME_SORTED=true \
-                DUPLICATE_SCORING_STRATEGY=SUM_OF_BASE_QUALITIES \
-                TAGGING_POLICY=All \
-                REMOVE_DUPLICATES=false \
-                VALIDATION_STRINGENCY=LENIENT \
-                QUIET=false \
-                COMPRESSION_LEVEL=9 \
-                VERBOSITY=INFO
-```
-
-and removing the duplicated reads
-
-```{base, remove dups, eval = F}
-samtools view -@ $Num_Processes --with-header \
-  --exclude-flags 0x004 --exclude-flags 0x0400 \
-  -b -o ${OUTPUT_BAM_FILE} ${file}
-```
-
-```{bash, merge reps, eval = F}
-samtools merge -o ${INPUT_BAM_DIR}/${SPECIES_GENOME_SUFFIX}_${CELL_TYPE}_${TARGET}_mrgd_${bam_suffix}.bam ${bam_files}
-```
-
-For both the individual reps and the merged replicates.
-
-```{bash, bam to bigwig, eval = F}
-bamCoverage --bam ${bam_files} \
-            -o ${MRGD_BW_OUT_SAMPLE} \
-            --outFileFormat bigwig \
-            --binSize ${bin_size} \
-            --normalizeUsing ${norm_method} \
-            --effectiveGenomeSize ${EFF_GENOME_SIZE} \
-            --extendReads ${gDNA_fragment_size} \
-            --ignoreForNormalization chrX chrM \
-            --verbose \
-            --numberOfProcessors ${Num_Processes}
-```
-
-Peak calling:
-
-Effective genome size (how much of the genome is mappable) was calculated using `faCount` method (total (A+C+G+T) nt - N nt).
-
--   hg38=     2913022398
-
--   macmul10= 2936876161
-
--   mm10=     2652783500
-
--   bostau9=  2715825630
-
--   mondom5=  3501660299
-
--   galgal6=  1055580959
-
-*q*-value threshold was very strong at `0.000001`.  Minimum fragment size: `20`. In addition `MIN_PEAK_LEN == "NULL" && MAX_GAP_BETWEEN_PEAKS == "NULL"` so that `PEAK_ARGS=""`.
-
-```{bash, macs2 peak calling, eval = F}
-macs2 callpeak --treatment ${TREAT_FILE_PS} --control ${CNTRL_FILE_PS} \
-  --format BAM --outdir ${OUT_DIR} --gsize ${EFF_GENOME_SIZE} \
-  --qvalue ${QVAL_THRSHLD} --seed 16 --verbose 1 \
-  --slocal 1000 --llocal 10000 --scale-to small ${PEAK_ARGS} 
-  --d-min ${MIN_D_FRAG} --cutoff-analysis \
-  --call-summits --name "${treatment_file_name}"
-```
-
-From UCSC we downloaded the CGI coordinates and the peaks summits were intersected with the CGI. Here below I past the human command as an example.
-```{bash, bedtools isect peaks CGI, eval = F}
-bedtools intersect -a ../../peak/macs2/Amniota_Testes/hg38_dups_rmvd/q0.000001_minDEFAULT_gapDEFAULT/HomSap_PS_K27me3/HomSap_PS_K27me3_summits.bed -b CGI/CpG_hg38_n27949.bed | grep "^chr" > Peaks_intersect_CGI_hg38_n26997.bed
-```
-
-The matrix was generated with:
-
-```{bash, deeptools compute matrix, eval = F}
-computeMatrix reference-point -S ${mergd_reps.bigwig} -R ${Peaks_intersect_CGI.bed} \
-    --outFileName ${MAT_OUT_SAMPLE} --outFileNameMatrix ${TAB_OUT_SAMPLE} \
-    --numberOfProcessors $Num_Processes --beforeRegionStartLength 7500 \
-    --afterRegionStartLength 7500 \
-    --referencePoint center --binSize 50 \
-    --missingDataAsZero --smartLabels --sortRegions "descend"
-```
-
-Now I list the paths to all the matrixes for each assembly.
-
-```{r, list paths to matrixes for each assembly}
-assembly_dir <- list.files(mat_dir, pattern = '_Summits_in_CGIs_mrgd')
-
-bed_name <- 'Summits_in_CGIs'
-
-lapply(assembly_dir,  function(x){
-  list.files(path = file.path(mat_dir, x), 
-             pattern = paste0("PS_K27me3_", bed_name, "_UP7500_DW7500_bs50.tab"), full.names = T)
-}) |> unlist() -> tab_path_list
-```
-
-For plotting I import the matrix generated by `computeMatrix` in R.
-
-```{r, import matrixes}
-list_df <- list()
-for (a in 1:length(assembly_dir)) {
-
-  tab_df <- read_delim(file = tab_path_list[a], skip = 3,
-                       delim = "\t", escape_double = FALSE, show_col_types = F,
-                       col_names = FALSE, comment = "#", trim_ws = TRUE, skip_empty_rows = T)
-  
-  tab_df |> 
-    colMeans() |>
-    as_tibble() |>
-    setNames('H3K27me3_signal') |>
-    rownames_to_column("bin") |>
-    mutate(bin = as.integer(bin) ) |>
-    mutate(Species = gsub(paste0('_', bed_name, '_mrgd'), '', assembly_dir[a] ), 
-           .before = bin ) -> tidy_bins
-  
-  list_df[[a]] <- tidy_bins
-}
-  
-df_species <- do.call('rbind', list_df)
-```
-
-Reshape the data and prepare it for plotting. Note: the `[,1]` after `scale()` is not really necessary but gives better colnames. To scale from zero to 1, I use my simple function `scale01`.
-
-```{r, tidy data for plot}
-df_species |>
-  group_by(Species) |>
-  mutate(scaled_H3K27me3_signal = scale(H3K27me3_signal)[,1], 
-         scaled01_H3K27me3_signal = scale01(H3K27me3_signal) ) |>
-  pivot_longer(ends_with("H3K27me3_signal"), names_to = 'Scaling_Type', values_to = 'Signal') |>
-  mutate(Species = case_when( Species == 'GalGal' ~ 'Chicken',
-                              Species == 'HomSap' ~ 'Human',
-                              Species == 'MonDom' ~ 'Opossum',
-                              Species == 'MusMus' ~ 'Mouse',
-                              ) ) |>
-  mutate(Species = factor(Species, levels = c('Human', 'Mouse', 'Opossum', 'Chicken'))) |>
-  ungroup() -> tidy_df_species
-```
-
-Rename strip for the figure
-```{r, meta gene strip renaming for different scaling methods}
-Metaplot_scaling_strip <- strip_themed(
-  background_x = elem_list_rect(fill = c('#f05b43', '#f7dea3', '#748f46' ) ),
-  text_x = elem_list_text(colour = c('white', 'black', 'white') ) 
-  )
-
-strip_scaling_conversion <- c(
-  `H3K27me3_signal` = "Raw H3K27me3 signal",
-  `scaled_H3K27me3_signal` = "Scaled H3K27me3 signal",
-  `scaled01_H3K27me3_signal` = "0 - 1 scaled H3K27me3 signal" 
-)
-```
-
-Plot all the metagene profiles with different scaling methods.
-
-```{r, plot all profiles with different scaling mehtods, fig.width = 4, fig.height = 2}
-ggplot(tidy_df_species) +
-    aes(x = bin, y = Signal, colour = Species) +
-    facet_wrap2( ~ Scaling_Type, nrow = 1, scales = 'free_y', strip = Metaplot_scaling_strip, 
-              labeller = labeller(Scaling_Type = strip_scaling_conversion ) ) +
-    geom_path(linewidth = 0.5)+ 
-    scale_colour_manual(values = c('Human' = "#e76254", 'Mouse' = "#f7aa58",
-                                   'Opossum' = "#72bcd5", 'Chicken' = "#376795")) +
-    scale_x_continuous(breaks = c(0, 75, 150, 225, 300), 
-                       labels = c('-7.5', '-3.75', 'centre', '3.75', '7.5'),
-                       expand = expansion(mult = 0, add = 1) ) +
-    scale_y_continuous(expand = expansion(mult = 0.025, add = 0 ) ) +
-    labs(x = "Distance to CGI centre (kb)", y = 'HK27me3 signal') +
-    profile_th -> p_profile_scaling_Amniotes
-p_profile_scaling_Amniotes
-```
-
-Save to pdf
-
-```{r, save different scaling metaprofile amniotes H3K27me3}
-ggsave(filename = 'Lesch_4Species_H3K27me3_Scaling_Metagene_Profile.pdf', 
-       path = pdf_dir_fig5, plot = p_profile_scaling_Amniotes,
-       device = cairo_pdf, units = 'cm',  width = 10, height = 5)
-```
-
-Change strip name for the supplementary figure. These are "targeted CGI" because they contain H3K27me3 signal, but there's no direct evidence of PRC2 binding there.
-
-```{r, meta gene strip renaming for final supp}
-Metaplot_scaling_strip <- strip_themed(
-  background_x = elem_list_rect(fill = c('#f05b43') ),
-  text_x = elem_list_text(colour = c('white', 'black', 'white') ) 
-  )
-
-strip_scaling_conversion <- c(
-  `scaled01_H3K27me3_signal` = "Targeted CGI" 
-)
-```
-
-Plot supplementary figure 5 XYZ.
-
-```{r, plot fig S5XYZ, fig.width = 1.85, fig.height = 2}
-subset(tidy_df_species, Scaling_Type == 'scaled01_H3K27me3_signal') |>
-ggplot() +
-    aes(x = bin, y = Signal, colour = Species) +
-    facet_wrap2( ~ Scaling_Type, nrow = 1, scales = 'free_y', strip = Metaplot_scaling_strip, 
-              labeller = labeller(Scaling_Type = strip_scaling_conversion ) ) +
-    geom_path(linewidth = 0.5)+ 
-    scale_colour_manual(values = c('Human' = "#e76254", 'Mouse' = "#f7aa58",
-                                   'Opossum' = "#72bcd5", 'Chicken' = "#376795")) +
-    scale_x_continuous(breaks = c(0, 75, 150, 225, 300), 
-                       labels = c('-7.5', '-3.75', 'centre', '3.75', '7.5'),
-                       expand = expansion(mult = 0, add = 1) ) +
-    scale_y_continuous(expand = expansion(mult = 0.025, add = 0 ) ) +
-    labs(x = "Distance to CGI centre (kb)", y = 'scaled HK27me3 signal') +
-    profile_th +
-    theme(legend.position = c(0.8, 0.89) ) -> p_profile_01scaled_Amniotes
-p_profile_01scaled_Amniotes
-```
-Save to pdf. 
-
-```{r, save figS5xyz metaprofile amniotes H3K27me3}
-ggsave(filename = 'FigS5XYZ_4Species_H3K27me3_Metagene_Profile.pdf', 
-       path = pdf_dir_fig5, plot = p_profile_01scaled_Amniotes,
-       device = cairo_pdf, units = 'cm', width = 4, height = 5)
-```
-
-I think I should also have made a set of bed files where there's no intersection of CGI and H3K27me3 to be used as "non-targeted CGI".
 
 End of analysis.
 
