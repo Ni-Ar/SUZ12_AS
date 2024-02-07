@@ -1,28 +1,30 @@
-# Overview
+# 🧬 Project Overview
 
-Explain here what this repository contains here...
+Welcome to the code repository for our paper:
 
-# Detailed analysis report 
+📄 Alternative Splicing Decouples Local from Global PRC2 Activity (insert DOI badger)
 
-To view the main html home page with links to the analysis reports:
+This repository houses the code used to generate the figures presented in the paper. The code is organized into `R` quarto notebooks, with each notebook dedicated to one of the seven figures in the paper.
 
-- Go to [this page](https://htmlpreview.github.io/?https://github.com/Ni-Ar/SUZ12_AS/blob/main/_Code/index.html) (available only when this GitHub repo will be public)
+For easy access to each analysis report, visit our main homepage with direct links to the analysis reports:
 
-Explanation: this repository is **private**, for security reason each file has a `token=<TOKEN>` long random word at the end of the URL, that changes from time to time, so it's not possible to create a permanent link for the html preview.
+🔗 [Main Homepage](https://htmlpreview.github.io/?https://github.com/Ni-Ar/SUZ12_AS/blob/main/_Code/index.html)
 
-For now to check the individual html report you need to construct the URL with the token manually.
+Feel free to explore the code and reproduce our findings! 🌟
 
-For example for figure 1 you have to:
+If you use our work, please cite us appropriately 
 
-1. Go to Figure 1 html page ([_Code/Fig1/Main_Panels_Fig1.html](_Code/Fig1/Main_Panels_Fig1.html)) 
-2. Click on 'Raw' on the right handside
-3. Copy the URL of this "raw" web-page
-4. In a new browser tab type `https://htmlpreview.github.io/?` and paste the URL you copied in step 4.
+# 📖 Citation
 
-# Citation
+[BioRχiv](https://www.biorxiv.org/content/10.1101/2023.04.30.538846v1)
 
-This repository is the accompanying code for the paper:
+> Arecco, N.†, Mocavini, I.†, Blanco, E., Ballaré, C., Bonnal, S., Irimia, M., & Di Croce, L. (2023). 
+> *Alternative Splicing Decouples Local from Global PRC2 Activity* **BioRχiv**.
+> DOI: 10.1101/2023.04.30.538846
 
-> Arecco, N., Mocavini, I., Blanco, E., Ballaré, C., Bonnal, S., Irimia, M., & Di Croce, L. (2023). Alternative splicing decouples local from global PRC2 activity. **BioRxiv**.
->  https://doi.org/10.1101/2023.04.30.538846
+# Related things
 
+- 🐦 [Twitter thread](https://twitter.com/NccAcc/status/1653308468609073153)
+- 🧠 [Alternative splicing database](https://vastdb.crg.eu/wiki/Main_Page) 
+- 💡 ChIP-seq and RNA-seq fastq files (insert link)
+- 💪 Mass spectrometry raw data (insert link) 
