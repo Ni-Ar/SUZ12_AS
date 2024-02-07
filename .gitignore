@@ -24,6 +24,8 @@ _Figures/Schemes*
 _Figures/Twitter*
 _Figures/plots*
 _Figures/various*
+_Figures/Cover*
+_Figures/Graphical_Abstract*
 
 # Old analysis code
 _Code/Fig5/pdf*
@@ -33,17 +35,13 @@ _Code/PreRevision_Analysis*
 # All slides
 _Slides/*
 
-# All numbered subfolders
+# All numbered files and subfolders
 0*
 1*
 2*
 
-# Other experiments
-_Code/Fig5/tables/Suz12_exon4_*_quantifications.xlsx
 
 ## Never commit
 *_Arecco.pdf
-#_Manuscript/01_*
-#_Manuscript/02_*
 _Manuscript/notes_*.txt
 _Manuscript/bioRxiv/*.xlsx
