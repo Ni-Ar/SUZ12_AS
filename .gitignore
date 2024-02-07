@@ -1,23 +1,21 @@
-# System files
+## System files
 .fuse_hidden*
 .DS_Store
 ._.DS_Store
 ._*
 
-# Temporary files created by R markdown
+## Temporary files created by R markdown
 *.utf8.md
 *.knit.md
 
-# Session Data files
+## Session Data files
 .RData
 
-# History files
+## History files
 .Rhistory
 .Rapp.history
 
 ## Figure files
-#_Figures/All_Fig_*
-#_Figures/Fig*
 *.ai
 _Figures/All_Fig_PDFs/Merged_Fig*
 _Figures/Supplementary_Fig*
@@ -29,12 +27,10 @@ _Figures/various*
 _Figures/Cover*
 _Figures/Graphical_Abstract*
 
-# Old analysis code
-_Code/Fig5/pdf*
-_Code/Fig5/tables*
+# Old analysis stuff
 _Code/PreRevision_Analysis*
 
-# All slides
+## Power point presentations
 _Slides/*
 
 # All numbered files and subfolders
@@ -42,7 +38,7 @@ _Slides/*
 1*
 2*
 
-## Never commit
+## Paper related things
 *_Arecco.pdf
 _Manuscript/notes_*.txt
 _Manuscript/bioRxiv/*.xlsx
