@@ -46,7 +46,7 @@ library(Cairo)
 library(DT)
 ```
 
-Load my R package `niar` to use my custom made function to parse EpiProfile output.
+Load my R package `niar` to use my custom-made function to parse EpiProfile output.
 
 ```{r import my R package based available version, warning = FALSE}
 if ( ('niar' %in% .packages(all.available = TRUE)) == TRUE ) {
