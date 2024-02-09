@@ -1,3 +1,6 @@
+[![DOI](https://zenodo.org/badge/688164096.svg)](https://zenodo.org/doi/10.5281/zenodo.10640541)
+
+
 # 🧬 Project Overview
 
 Welcome to the code repository for our paper:
