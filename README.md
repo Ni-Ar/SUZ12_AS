@@ -2,7 +2,7 @@
 
 Welcome to the code repository for our paper:
 
-📄 Alternative Splicing Decouples Local from Global PRC2 Activity (insert DOI badger)
+📄 Alternative Splicing Decouples Local from Global PRC2 Activity
 
 This repository houses the code used to generate the figures presented in the paper. The code is organized into `R` quarto notebooks, with each notebook dedicated to one of the seven figures in the paper.
 
@@ -22,9 +22,12 @@ If you use our work, please cite us appropriately
 > *Alternative Splicing Decouples Local from Global PRC2 Activity* **BioRχiv**.
 > DOI: 10.1101/2023.04.30.538846
 
-# Related things
+# Related links
 
-- 🐦 [Twitter thread](https://twitter.com/NccAcc/status/1653308468609073153)
+- 🐦 [BioRχiv twitter thread](https://twitter.com/NccAcc/status/1653308468609073153)
 - 🧠 [Alternative splicing database](https://vastdb.crg.eu/wiki/Main_Page) 
-- 💡 ChIP-seq and RNA-seq fastq files (insert link)
-- 💪 Mass spectrometry raw data (insert link) 
+- 💡 ChIP-seq and RNA-seq fastq files ([NCBI GEO](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE223666))
+- 💪 Mass spectrometry raw files (PRIDE: [PXD046640](https://www.ebi.ac.uk/pride/archive/projects/PXD046640/), [PXD046660](https://www.ebi.ac.uk/pride/archive/projects/PXD046660/), [PXD046742]( https://www.ebi.ac.uk/pride/archive/projects/PXD046742/))
+- 🏗 Colabfold PRC2 structural predictions ([GitHub repo](https://github.com/Ni-Ar/colabfold_crg))
+- 🔬Immunofluorescence microscopy czi files ([Mendeley data](https://data.mendeley.com/datasets/sb72467mrf/1))
+
