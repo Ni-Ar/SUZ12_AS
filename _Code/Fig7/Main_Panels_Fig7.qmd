@@ -1,0 +1,1701 @@
+---
+title: "Figure 7 and supplementary figure 7"
+author: "Niccolò Arecco"
+toc: true
+number-sections: true
+highlight-style: pygments
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-copy: true
+    theme:
+      light: flatly
+      dark: darkly
+editor: source
+bibliography: ../Paper_Analysis_References.bib
+---
+
+# Intro
+
+Last code execution: `r format(Sys.time(), '%Y %B %d, %A @ %H:%m:%S')`.
+
+Write a concise introduction.
+
+```{r, empty, eval = FALSE, echo = FALSE}
+# this is just to have r chunks inserted with 
+```
+
+```{bash, crgmnt, eval = F, echo = T}
+sshfs narecco@ant-login.linux.crg.es:/users/mirimia ~/mnt
+```
+
+# Set Up
+
+## Packages
+
+Load packages required for the analysis and suppress any message. Check the @sec-sessioninfo section at the end for package versions.
+
+```{r, Loading required packages, warning = FALSE, message = FALSE}
+library(dplyr, warn.conflicts = F, quietly = T)
+library(readr)
+library(stringr)
+library(tidyr)
+library(tibble)
+library(forcats)
+library(stringr)
+library(ggplot2)
+library(ggrastr) # for rasterizing only the geom_point layer in a plot with many data-points
+library(ggforce)
+library(ggsignif)
+library(patchwork)
+library(rstatix)
+library(org.Mm.eg.db)
+library(clusterProfiler)
+library(pheatmap)
+library(DT)
+library(UpSetR)
+```
+
+Load my R package `niar` to use some custom-made functions
+
+```{r import my R package based available version, warning = FALSE}
+if ( ('niar' %in% .packages(all.available = TRUE)) == TRUE ) {
+  library('niar')
+} else if ( ('niar' %in% .packages(all.available = TRUE)) == FALSE ){
+  message("The package niar is not installed so I'm trying to load it from ",
+          "the local repository of the package")
+  if ( dir.exists('~/mnt/narecco/software/R/niar' ) )  {
+    devtools::load_all(path = '~/mnt/narecco/software/R/niar')
+  } else {
+    stop("Can't find the local repo of the niar package! ",
+         "You must install it with:\n",
+         "devtools::install_github('Ni-Ar/niar') ")
+  }
+} else{
+  stop("Can't understand if 'niar' package was installed beforehand")
+}
+```
+
+## Functions
+
+Custom-made functions. 
+
+```{r, label = "Function to import DESeq2 res tables" }
+import_res <- function(file_path, signif_thrshld = 0.05, invert_l2FC = F ) {
+  df <- read_delim(file = file_path, delim = '\t', show_col_types = F)
+
+  # annotate res
+  df |>
+    mutate(signif = case_when(padj <= signif_thrshld ~ TRUE,
+                              padj > signif_thrshld ~ FALSE) ) -> df
+    
+  if (invert_l2FC == TRUE) {
+    df <-  df |> mutate(log2FoldChange = -log2FoldChange)
+  }
+    df |>
+    mutate(direction = case_when(signif == TRUE & log2FoldChange >= 0 ~ 'UP',
+                                 signif == TRUE & log2FoldChange < 0 ~ 'DOWN',
+                                 signif == FALSE | is.na(padj) ~ 'NONE') ) |>
+    # order point for plotting
+    mutate(direction = factor(direction, levels = c('NONE', 'UP', 'DOWN'))) |>
+    arrange(direction) |> # baseMean
+    # filter out missing values for the plot
+    subset(!is.na(log2FoldChange)) |>
+    subset(!is.na(baseMean)) -> res
+    return(res)
+}
+```
+
+Import RPKMs from Enrique's analysis
+
+```{r, label = "helper function to import RPKMs"}
+import_rpkms <- function(base_path, file_name, sample_order) {
+  # path
+  rpkm_path <- file.path(base_path, file_name)
+  stopifnot(file.exists(rpkm_path))
+  # read and reshape
+  read_delim(file = rpkm_path, delim = "\t", show_col_types = FALSE, 
+             col_names = c('external_gene_name', sample_order)) |>
+    pivot_longer(cols = -("external_gene_name"), names_to = "Pretty_Sample", 
+                 values_to = "RPKM") -> df_rpkm
+  return(df_rpkm)
+}
+```
+
+Helper function required to plot number of DEGs
+
+```{r, label = "helper function for DEGs counts"}
+summarise_DEGs <- function(file_path, sample_name_contrast, signif_thrshld = 0.05, ... ) {
+  # import file
+  anno_df <- import_res(file_path, signif_thrshld, ...) |>
+    mutate(contrast = paste0(sample_name_contrast, '_vs_WT') )
+  
+  # count how many DEG per condition.
+  anno_df |>
+    count(direction, contrast) |>
+    complete(direction, contrast, fill = list(n = 0) ) |>
+    setNames(c('direction', 'contrast', 'Num_genes')) -> summary_df
+  return(summary_df)
+}
+```
+
+
+Run GO from file with gene names.
+
+```{r, label = "helper function for GO terms of up and downregulated genes"}
+run_enrichGO_UP_DOWN <- function(up_genes_path, do_genes_path, sample_name_contrast) {
+  UP_genes <- read.table(up_genes_path)[,1]
+  message('Number of ', sample_name_contrast, 
+          ' up-regulated genes entering the GO term analysis: ',
+          length(UP_genes))
+  
+  res <- enrichGO(gene          = UP_genes,
+                  OrgDb         = org.Mm.eg.db,
+                  keyType       = 'SYMBOL',
+                  ont           = "ALL",
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.05,
+                  qvalueCutoff  = 0.1)
+  
+  GO_UP <- as_tibble(res) |>
+    mutate(Sample = sample_name_contrast, 
+           Direction = 'UP',
+           .before = ONTOLOGY)
+  
+  DO_genes <- read.table(do_genes_path)[,1]
+  message('Number of ', sample_name_contrast, 
+          ' down-regulated genes entering the GO term analysis: ',
+          length(DO_genes))
+  
+  res <- enrichGO(gene          = DO_genes,
+                  OrgDb         = org.Mm.eg.db,
+                  keyType       = 'SYMBOL',
+                  ont           = "ALL",
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.05,
+                  qvalueCutoff  = 0.1)
+  
+  GO_DO <- as_tibble(res) |>
+    mutate(Sample = sample_name_contrast, 
+           Direction = 'DOWN',
+           .before = ONTOLOGY)
+  return(rbind(GO_UP, GO_DO))
+}
+```
+
+Ggplot plotting function. 
+
+```{r, label = "ggplot function for MA plots", eval = T}
+plot_MA_fig <- function(file_path, signif_thrshld = 0.05, sample_name_contrast,  
+                        Y_lim = c(-8, 8), Panel_Num, label = FALSE, ...) {
+
+  anno_df <- import_res(file_path, signif_thrshld, ...) 
+
+  ggplot(anno_df) +
+    aes(x = log2(baseMean), y = log2FoldChange, fill = direction) +
+    geom_point(shape = 21, stroke = 0.05, size = 0.65) +
+    geom_hline(yintercept = 0, linewidth = 0.2, linetype = 'solid', colour = 'black' ) +
+    scale_x_continuous(n.breaks = 6, 
+                       expand = expansion(mult = c(0.01, 0), add = c(0.02, 0)) ) +
+    scale_y_continuous(limits = Y_lim, oob = scales::squish, n.breaks = 10,
+                       expand = expansion(mult = 0, add = 0.02 ) ) +
+    scale_fill_manual(values = c('UP' = '#E63945', 
+                                 'DOWN' = '#1D3557', 'NONE' = 'gray84') )  +
+    labs(x = expression("Average expression (" ~ log[2] ~ ")" ), 
+         y = paste0("log2 fold change ", sample_name_contrast, "/WT") ) +
+    coord_cartesian(xlim = c(-3, 20), clip = 'on') +
+    theme_classic(base_family = "Arial", base_size = 6) +
+    theme(axis.text = element_text(colour = 'black'),
+          axis.title = element_text(size = 5, colour = 'black'),
+          axis.title.y = element_text(margin = margin(r = -0.2, unit = 'pt')),
+          axis.title.x = element_text(margin = margin(t = -0.5, unit = 'pt')),
+          axis.line = element_line(linewidth = 0.15),
+          axis.ticks = element_line(colour = 'black', linewidth = 0.15),
+          axis.ticks.length = unit(1, units = 'mm'),
+          legend.position = 'none',
+          legend.title = element_blank(),
+          panel.grid.major = element_line(colour = 'gray90', linewidth = 0.075),
+          panel.background = element_blank(),
+          panel.border = element_blank(),
+          plot.background = element_blank()) -> p_MA
+  
+  if(label == TRUE) {
+    p_MA <- p_MA +
+      geom_text_repel(data = subset(anno_df, direction == 'UP'), 
+                      aes(label = external_gene_name), nudge_x = 0.2, nudge_y = 0.2, 
+                      direction = 'x', force_pull = 2, segment.curvature = -1e-20,
+                      size = 1, segment.size = unit(0.1, units = 'mm')) +
+      geom_text_repel(data = subset(anno_df, direction == 'DOWN'), 
+                      aes(label = external_gene_name), nudge_x = 0.2, nudge_y = -0.2,
+                      direction = 'x', force_pull = 2, segment.curvature = -1e-20,
+                      size = 1, segment.size = unit(0.1, units = 'mm'))  
+  }
+  
+  # save all plot as vectorial
+  ggsave(path = pdf_dir_fig, plot = p_MA, device = cairo_pdf, units = "cm",
+         filename = paste0("Fig", Panel_Num, "_MA_plot_", sample_name_contrast,
+                           "_vs_WT_vectorial_points", ".pdf"),
+         width = 4.0, height = 3.0)
+  
+  # save all plot as vectorial, except for points as rasterized image at 400 dpi.
+  r_MA <- rasterize(p_MA, layers = 'Point', dpi = 400)
+  
+  ggsave(path = pdf_dir_fig, plot = r_MA, device = cairo_pdf, units = "cm",
+         filename = paste0("Fig", Panel_Num, "_MA_plot_", sample_name_contrast,
+                           "_vs_WT_rasterized_points", ".pdf"),
+         width = 4.0, height = 3.0)
+  r_MA
+}
+```
+
+Combine GO terms heatmap and upset plot into one.
+
+```{r, label = "plot combined heatmap and upset plot"}
+# Function to check gene presence. This should be generalised to any Sample name.
+check_gene_presence <- function(gene, df) {
+  data.frame(
+    Gene = gene,
+    KO = gene %in% df$Gene[df$Sample == "KO"],
+    KOrL = gene %in% df$Gene[df$Sample == "KOrL"],
+    KOrS = gene %in% df$Gene[df$Sample == "KOrS"]
+  )
+}
+# lgnd_mm = c(width, height) in mm
+plot_heatmap_upset <- function(df, k_text = 20, 
+                               htmp_min_col = 'white', 
+                               htmp_max_col = '#E63945',
+                               bar_txt_size = 1.5,
+                               htmp_txt_size = 2,
+                               lgnd_mm = c(5, 2),
+                               patch_rel_heights = c(5, 0.45),
+                               isect_point_size = 1.25,
+                               bar_num_nudge = 7, 
+                               GO_txt_width = 20) {
+  
+  # order GO IDs description as factor and wrap ----------------------
+  df <- df |>
+    mutate(Description = str_wrap(Description, width = GO_txt_width) ) |>
+    mutate(Description = fct_reorder(Description, 
+                                     -log10(p.adjust), .desc = F))
+  GO_description_lvl <- levels(df$Description)
+  
+  # Plot heatmap of GO terms ----------------------
+  ggplot(df, aes(x = Sample, y = Description, 
+                 fill = -log10(p.adjust) ) )  +
+    geom_tile() +
+    geom_text(aes(label = Count), size = htmp_txt_size ) +
+    scale_fill_gradient(low = htmp_min_col, high = htmp_max_col)  +
+    coord_cartesian(expand = F, clip = 'off') +
+    theme_classic(base_size = 6, base_family = 'Arial') +
+    guides(fill = guide_colourbar(title.position = "bottom") )+
+    theme(legend.position = 'bottom',
+          legend.direction = "horizontal", 
+          legend.background = element_blank(),
+          legend.box.background = element_blank(),
+          legend.text = element_text(vjust = 1, margin = margin(t = 0, b = 0)),
+          legend.title.align = 0.5,
+          legend.title = element_text(vjust = 1, size = 5),
+          legend.margin = margin(t = -0.5, unit = 'mm'),
+          legend.key.width = unit(lgnd_mm[1], units = 'mm'),
+          legend.key.height = unit(lgnd_mm[2], units = 'mm'),
+          axis.text = element_text(colour = 'black'),
+          axis.text.x = element_text(margin = margin(t = -0.2, b = -1, unit = 'mm')),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          strip.background = element_blank(),
+          panel.background = element_blank(),
+          panel.grid = element_blank(),
+          plot.background = element_blank()) -> p_hm
+  
+  # Extract genes from df ----------------------
+  df |> 
+    select(Sample, ID, Description, geneID) |>
+    unique() |>
+    group_by(Sample, ID) |>
+    # turn character with / separator into list
+    mutate(genes_list = list(strsplit(geneID, "/")[[1]]), 
+           .before = ID) |>
+    ungroup() |>
+    # Rename samples
+    mutate(Sample = gsub('\\+', 'r', Sample) ) |>
+    unnest_wider(genes_list, names_sep = '_g') |>
+    pivot_longer(cols = starts_with('genes_list_g'), 
+                 values_to = 'Gene') |>
+    select(-c(name, geneID)) |>
+    # NA introduced for un-nesting
+    subset(!is.na(Gene)) |>
+    group_by(ID) -> df_long
+  
+  # get all unique genes
+  unique_genes <- unique(df_long$Gene)
+  unique_IDs <- unique(df_long$ID)
+  unique_descript <- unique(df_long$Description)
+  
+  # Check in each GO term how many genes there are per sample ----------------------
+  df_occurance <- list()
+  
+  for (g in 1:length(unique_IDs)) {
+    df_go <- subset(df_long, ID == unique_IDs[g])
+    result_list <-  lapply(unique_genes, check_gene_presence, df = df_go)
+    
+    # Combine the results into a single data frame
+    df_result <- as_tibble(do.call(rbind, result_list)) |>
+      mutate(ID = unique_IDs[g], .before = Gene)
+    
+    df_occurance[[g]] <- df_result
+  }
+  
+  do.call(rbind, df_occurance) |> 
+    as_tibble() |>
+    group_by(ID) |>
+    select(-Gene) |>
+    mutate(across(where(is.logical), as.integer ) ) |>
+    # get occurrence of all combinations
+    table() |>
+    as.data.frame() |>
+    as_tibble() |> 
+    mutate(ID = as.character(ID)) -> df2
+  
+  # Prepare data for bar plot ----------------------
+  df2 |>
+    # if 1 turn into column name, if zero turn into empty string
+    mutate(across(where(is.factor), 
+                  .fns = ~ ifelse(.x == 1, yes = cur_column(), 
+                                  no = '*'))) |>
+    tidyr::unite(col = 'Isect', !contains(c('Freq', 'ID') ) ) |>
+    # remove empty intersection
+    subset(Isect != '*_*_*' ) |>
+    mutate(Isect = fct_reorder(Isect, Freq, .desc = T)) -> df3
+  
+  # Add description as factor  ----------------------
+  df |>
+    select(ID, Description, ONTOLOGY) |>
+    unique() |>
+    left_join(df3, by = join_by(ID)) |>
+    mutate(Description = factor(Description, 
+                                levels = rev(GO_description_lvl))
+           ) -> df4
+  
+  # Plot bars ----------------------
+  ggplot(df4) +
+    aes(x = Isect, y = Freq) +
+    facet_wrap(~Description, ncol = 1, strip.position = 'right') +
+    geom_col(width = 0.75) +
+    geom_text(data = subset(df4, Freq >= k_text), size = bar_txt_size,
+              aes(label = Freq), nudge_y = -bar_num_nudge,
+              colour = 'white') +
+    geom_text(data = subset(df4, Freq < k_text), size = bar_txt_size,
+              aes(label = Freq), nudge_y = bar_num_nudge,
+              colour = 'black') +
+    scale_x_discrete(expand = expansion(mult = 0, add = 0)) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.01), add = 0),
+                       n.breaks = 3) +
+    theme_classic(base_size = 6, base_family = 'Arial') +
+    theme(axis.text.x = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.text = element_text(colour = 'black'),
+          axis.ticks.length.y = unit(0.5, units = 'mm'),
+          strip.background = element_blank(),
+          panel.grid.major.y = element_line(colour = 'gray90', 
+                                            linewidth = 0.15),
+          panel.background = element_blank(),
+          panel.border = element_blank(),
+          plot.background = element_blank()) -> p_bar
+  
+  # Prepare data for intersection points   ----------------------
+  df2 |>
+    # if 1 turn into column name, if zero turn into empty string
+    mutate(across(where(is.factor), 
+                  .fns = ~ ifelse(.x == 1, yes = cur_column(),
+                                  no = '*'))) |>
+    tidyr::unite(col = 'Isect', !contains(c('Freq', 'ID') ), 
+                 remove = F ) |>
+    select(-c(ID, Freq)) |>
+    unique() |>
+    subset(Isect != '*_*_*' ) |>
+    pivot_longer(cols = !starts_with('Isect'), 
+                 names_to = 'Sample', values_to = 'Fill') |>
+    mutate(Fill = ifelse(Fill == '*', yes = 0L, no = 1L)) |>
+    group_by(Isect) |>
+    mutate(Num_zeros = sum(Fill)) |>
+    ungroup() |>
+    # add factors of the bar plot
+    mutate(Isect = factor(Isect, level = levels(df4$Isect), 
+                          ordered = T ) ) |>
+    mutate(Sample = gsub('r', '\\+', Sample) ) -> df5
+
+  # use drop on X-axis see:
+  # https://github.com/tidyverse/ggplot2/issues/3197
+  df5$Sample <- factor(df5$Sample, levels = rev(unique(df5$Sample)) )
+  
+  sample_highlight <- which(as.integer(unique(df5$Sample)) %% 2 == 0)
+  data.frame(Sample = sample_highlight, 
+             start = min(df5$Isect), 
+             end = max(df5$Isect)) -> df_highlight
+  
+  # Plot isect points  ----------------------
+  ggplot(df5) +
+    aes(x = Isect, y = Sample, fill = factor(Fill), group = Isect ) +
+    annotate("rect", xmin = -Inf, xmax = Inf, 
+             ymin = sample_highlight-0.25, ymax = sample_highlight+0.25,
+             fill = "gray50", alpha = 0.5) +
+    geom_path(data = subset(df5, Num_zeros > 1 & Fill > 0 ),
+              linewidth = 0.2, colour = 'black', linetype = 'solid') +
+    geom_point(shape = 21, size = isect_point_size, 
+               show.legend = F, stroke = 0.15) +
+    scale_fill_manual(values = c('1' = 'black', '0' = 'white')) +
+    scale_x_discrete(expand = expansion(mult =  0.05, add = 0), 
+                     drop = FALSE ) +
+    scale_y_discrete(expand = expansion(mult = c(0, 0.1), add = 0.) ) +
+    coord_cartesian(clip =  'off') +
+    labs(x = 'Intersections') +
+    theme_classic(base_size = 6, base_family = 'Arial') +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(colour = 'black'),
+          axis.title.x = element_text(size = 5),
+          axis.title.y = element_blank(),
+          strip.background = element_blank(),
+          axis.line = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank(),
+          panel.background = element_blank(),
+          panel.border = element_blank(), 
+          plot.background = element_blank()) -> p_isect
+  
+  # Combine all into one plot
+  # layout <- c(
+  #   area(t = 1, b = 50, l =  1, r = 1),
+  #   area(t = 1, b = 50, l =  2, r = 2),
+  #   area(t = 50, b = 52, l =  2, r = 2)
+  # )
+  layout <- "
+  AB
+  CD
+  "
+  wrap_plots(A = p_hm, B = p_bar, 
+             C = guide_area(), D = p_isect, 
+             design = layout, guides = 'collect', 
+             heights = patch_rel_heights) -> p_final
+  return(p_final)
+}
+```
+
+Ggplot2 themes.
+
+```{r, label = "neuronal quantifications plots theme"}
+theme_classic(base_size = 6, base_family = 'Arial') +
+  theme(axis.title = element_text(colour = 'black', size = 5),
+        axis.title.y = element_text(margin = margin(r = 0, unit = 'mm')),
+        axis.title.x = element_blank(),
+        axis.line = element_line(linewidth = 0.15),
+        axis.ticks.length = unit(1, units = 'mm'),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_line(colour = 'black', linewidth = 0.15),
+        axis.text = element_text(colour = 'black', size = 6.05),
+        axis.text.x = element_text(colour = 'black', margin = margin(t = -0.25, unit = 'mm'), vjust = 1),
+        legend.position = 'none', 
+        panel.grid.major.y = element_line(colour = 'gray90', linewidth = 0.075),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        plot.background = element_blank()) -> th_neuro
+```
+
+```{r, label = "ggplot theme wrapper for GO terms"}
+theme_classic(base_size = 6, base_family = 'Arial') +
+    theme(axis.text.y = element_blank(),
+          axis.title = element_text(colour = 'black', size = 5),
+          axis.title.y = element_text(margin = margin(r = -1, unit = 'mm')),
+          axis.title.x = element_text(margin = margin(t = -0.2, unit = 'mm')),
+          axis.line = element_line(linewidth = 0.15),
+          axis.ticks.length = unit(1, units = 'mm'),
+          axis.ticks.x = element_line(colour = 'black', linewidth = 0.15),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(colour = 'black'),
+          legend.position = 'none', 
+          panel.grid.major.x = element_line(colour = 'gray90', linewidth = 0.075),
+          panel.background = element_blank(),
+          panel.border = element_blank(),
+          plot.background = element_blank()) -> GO_terms_barplot_th
+```
+
+```{r, label = "ggplot theme wrapper for DEGs count"}
+theme_classic(base_family = "Arial", base_size = 5) +
+  theme(axis.text = element_text(colour = 'black'),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(size = 5),
+        axis.ticks.x = element_blank(),
+        axis.ticks.length = unit(1, units = 'mm'),
+        axis.line = element_line(linewidth = 0.15),
+        legend.position = 'none',
+        legend.title = element_blank(),
+        panel.grid.major.y = element_line(colour = 'gray90', linewidth = 0.075),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        plot.background = element_blank() ) -> DEG_counts_barplot_th
+```
+
+Paper's genotype palette.
+
+```{r, label = "plots genotype palette"}
+genotype_palette <- c('WT' = "#377AA3", 'CSex4' = "#B65120", '∆ex4' = "#F7CB48", 
+                      'KO' = "gray", 'KO+L' = "mediumpurple2", 'KO+S' = "darkorange1",
+                      'KO+L-3D' = "#74A57F", 'KO+S-3D' = "#E8B4BC")
+```
+
+## Directories & File Paths
+
+Here I organise all the file and directories paths I need to run the analysis and define where to save the processed tables and figures.
+
+```{r, set paths and dicretories, warning = FALSE, message = FALSE}
+oneDrive_Dir <- file.path("~/OneDrive - CRG - Centre de Regulacio Genomica/Suz12_AS_project")  
+code_dir_fig <- file.path(oneDrive_Dir, "_Code/Fig7")
+tbl_dir_fig <- file.path(code_dir_fig, "tables")
+pdf_dir_fig <- file.path(code_dir_fig, "pdfs")
+
+if (!dir.exists(pdf_dir_fig)) { dir.create(pdf_dir_fig, recursive = T) }
+if (!dir.exists(tbl_dir_fig)) { dir.create(tbl_dir_fig, recursive = T) }
+```
+
+Path to files in dropbox
+
+```{r, set paths to Dropbox}
+dropbox_dir <- file.path('~/Dropbox (CRG ADV)/54_Suz12AS')
+
+round6_path <- file.path(dropbox_dir, 'ROUND6_CGIs/files')
+Suz12_CGI_targets_path <- file.path(round6_path, "CGI_Suz12_genes.txt")
+stopifnot(file.exists(Suz12_CGI_targets_path))
+
+round22_deseq2_dir <- file.path(dropbox_dir, 'ROUND22_RNAseq20SamplesMolCellReview/STATS')
+stopifnot(dir.exists(round22_deseq2_dir))
+
+round22_enrich_dir <- file.path(dropbox_dir, 'ROUND22_RNAseq20SamplesMolCellReview/DEGs')
+stopifnot(dir.exists(round22_enrich_dir))
+
+round22_rpkm_dir <- file.path(dropbox_dir, 'ROUND22_RNAseq20SamplesMolCellReview/RPKMs')
+stopifnot(dir.exists(round22_rpkm_dir))
+```
+
+DESeq2 results file path. Pay attention that the contrast of WT vs KO is inverted and not like WT vs KO+L/S, so I have to invert the log2Fold Changes.
+```{r, set path to DESeq2 res of NPC RNA-seq}
+KO_path_NPC   <- file.path(round22_deseq2_dir, 'A-3_KO_B-3_WT_stats_paired.txt')
+KOrL_path_NPC <- file.path(round22_deseq2_dir, 'A-3_WT_B-3_KO-L_stats_paired.txt')
+KOrS_path_NPC <- file.path(round22_deseq2_dir, 'A-3_WT_B-3_KO-S_stats_paired.txt')
+```
+
+# Main Figure Panels
+
+## MA plot NPCs
+
+This function save to pdf directly to `r pdf_dir_fig`
+
+Plot ∆ex4 / WT MA plot (figure 7B)
+
+```{r, Make figure 7B, fig.width = 2, fig.height = 2}
+dEx4_path_NPC <- file.path(round22_deseq2_dir, 'A-2_WT_B-2_DELTAex4_stats_paired.txt')
+set.seed(16)
+plot_MA_fig(file_path = dEx4_path_NPC, sample_name_contrast = '∆ex4', Panel_Num = '7B', label = T)
+```
+
+Check how many genes are up- or down- regulated.
+```{r, get DEG numbers dex4}
+import_res(dEx4_path_NPC) |>
+  group_by(direction) |>
+  summarise(Num_DEGs = n())
+```
+
+Plot CSex4 / WT MA plot (figure 7C)
+
+```{r, Make figure 7C, fig.width = 2, fig.height = 2}
+CSx4_path_NPC <- file.path(round22_deseq2_dir, 'A-2_WT_B-2_CSex4_stats_paired.txt')
+plot_MA_fig(file_path = CSx4_path_NPC, sample_name_contrast = 'CSex4', Panel_Num = '7C')
+```
+
+Check how many genes are up- or down- regulated.
+```{r, get DEG numbers CSex4}
+import_res(CSx4_path_NPC) |>
+  group_by(direction) |>
+  summarise(Num_DEGs = n())
+```
+
+## GO terms CSex4 NPCs
+
+Import the genes that are differentially expressed in CSex4 with an adjusted *P*-value < 0.1
+
+Up-regulated genes.
+
+```{r, get up-regulated genes for go terms CSex4 }
+CSex4_UP_list <- read.table(file.path(round22_enrich_dir,
+                                      "A-2_WT_B-2_CSex4_UPgenelist_paired.txt"))
+CSex4_UP_genes <- CSex4_UP_list[,1]
+message('Num CSex4 up-regulated genes entering the GO term analysis: ', length(CSex4_UP_genes))
+```
+
+Down-regulated genes.
+
+```{r, get down-regulated genes for go terms CSex4}
+CSex4_DO_list <- read.table(file.path(round22_enrich_dir, "A-2_WT_B-2_CSex4_DOWNgenelist_paired.txt"))
+CSex4_DO_genes <- CSex4_DO_list[,1]
+message('Num CSex4 down-regulated genes entering the GO term analysis: ', length(CSex4_DO_genes))
+```
+
+GO terms enrichment analysis using `ClusterProfiler`:
+
+**Up-regulated genes** 
+```{r, CSex4 UP-regulated genes GO terms}
+res <- enrichGO(gene          = CSex4_UP_genes,
+                OrgDb         = org.Mm.eg.db,
+                keyType       = 'SYMBOL',
+                ont           = "ALL",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.1)
+
+CSex4_GO_UP <- as_tibble(res)
+```
+
+**Down-regulated genes** 
+```{r, CSex4 DOWN-regulated genes GO terms}
+res <- enrichGO(gene          = CSex4_DO_genes,
+                OrgDb         = org.Mm.eg.db,
+                keyType       = 'SYMBOL',
+                ont           = "ALL",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.1)
+
+CSex4_GO_DO <- as_tibble(res)
+```
+
+CSex4 vs WT NPC all GO terms for *up-regulated* genes. To simplify the html widget below I filter the actual number of GO terms to be displayed, focusing on only biological processes GO terms that are very significant. 
+
+```{r, show CSex4 GO terms NPCs up genes}
+CSex4_GO_UP |>
+  subset(ONTOLOGY == "BP" & p.adjust < 0.00001) |>
+  select(-geneID) |>
+  mutate(across(.cols = c(ends_with('value'), 'p.adjust'), .fns = \(x) signif(x, digits = 2)  ) ) |>
+  datatable(rownames = FALSE, filter = 'top', 
+            options = list(pageLength = 5, autoWidth = TRUE) )
+```
+
+CSex4 vs WT NPC all GO terms for *down-regulated* genes. Filter like above
+
+```{r, show CSex4 GO terms NPCs down genes}
+CSex4_GO_DO |>
+  subset(ONTOLOGY == "BP" & p.adjust < 0.00001) |>
+  select(-geneID) |>
+  mutate(across(.cols = c(ends_with('value'), 'p.adjust'), .fns = \(x) signif(x, digits = 2)  ) ) |>
+  datatable(rownames = FALSE, filter = 'top', 
+            options = list(pageLength = 5, autoWidth = TRUE) )
+```
+
+Select best top significantly enriched GO terms for conveying a message in the figure 7D
+
+```{r, make figure 7D, fig.width = 2, fig.height = 2}
+top_go_id_up <- c('GO:0007565', 'GO:1903489', 'GO:0001890', 'GO:0030879', 'GO:0001935')
+
+CSex4_GO_UP|>
+  subset(ID %in% top_go_id_up) |>
+  mutate(Description = str_wrap(Description, width = 40)) |>
+  mutate(Description = fct_reorder(Description, rev(p.adjust)) )  |>
+  ggplot() +
+    geom_col(aes(x = -log10(p.adjust),  y = Description, fill = -log10(p.adjust)), 
+             colour = 'black', linewidth = 0.2 ) +
+    geom_text(aes(label = Description, x = 0.15, y = Description), hjust = 0, size = 1.75 ) +
+    scale_fill_gradient(low = '#fad7d9', high = '#E63945') +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05)), n.breaks = 6 ) +
+    coord_cartesian(xlim = c(0, NA)) +
+    labs(x = expression(-log[10] ~ "adj. P-value"),
+         y = "GO terms") + GO_terms_barplot_th -> p_CSex4_GO_UP
+p_CSex4_GO_UP
+```
+
+Save to pdf.
+
+```{r, save figure 7D to pdf }
+ggsave(path = pdf_dir_fig, plot = p_CSex4_GO_UP, device = cairo_pdf, units = "cm",
+       filename = paste0("Fig7D_GO_terms_UP_CSex4_vs_WT_bars.pdf"),
+       width = 3.25, height = 3.05)
+```
+
+Plot GOs of down-regulated genes
+
+```{r, make figure 7E, fig.width = 2, fig.height = 2}
+top_go_id_down <- c('GO:0007389', 'GO:0001655', 'GO:0050767', 'GO:0007409', 'GO:0030900')
+
+CSex4_GO_DO |>
+  subset(ID %in% top_go_id_down) |>
+  mutate(Description = str_wrap(Description, width = 40)) |>
+  mutate(Description = fct_reorder(Description, rev(p.adjust)) )  |>
+  ggplot() +
+    geom_col(aes(x = -log10(p.adjust),  y = Description, fill = -log10(p.adjust)), 
+             colour = 'black', linewidth = 0.2 ) +
+    geom_text(aes(label = Description, x = 0.2, y = Description), hjust = 0, size = 1.75 ) +
+    scale_fill_gradient(low = '#C0CCDD', high = '#305890') +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05)), n.breaks = 6 ) +
+    coord_cartesian(xlim = c(0, NA)) +
+    labs(x = expression(-log[10] ~ "adj. P-value"),
+         y = "GO terms") + GO_terms_barplot_th -> p_CSex4_GO_DO
+p_CSex4_GO_DO
+```
+
+Save to pdf. 
+
+```{r, save to pdf figure 7E}
+ggsave(path = pdf_dir_fig, plot = p_CSex4_GO_DO, device = cairo_pdf, units = "cm",
+       filename = paste0("Fig7E_GO_terms_DOWN_CSex4_vs_WT_bars.pdf"),
+       width = 3.25, height = 3.05)
+```
+
+## CSex4 up-regulated genes expression levels
+
+Check the RPKM of the CSex4 placental up-regulated genes in all cell lines.
+
+```{r, reshape rpkms up-regualted genes in GO terms.}
+CSex4_GO_UP|>
+  subset(ID %in% top_go_id_up) |>
+  select(ID, geneID) |>
+  group_by(ID) |>
+    # turn character with / separator into list
+    mutate(genes_list = list(strsplit(geneID, "/")[[1]]), 
+           .before = ID) |>
+    ungroup() |>
+    unnest_wider(genes_list, names_sep = '_g') |>
+    pivot_longer(cols = starts_with('genes_list_g'), 
+                 values_to = 'Gene') |>
+    select(-c(name, ID, geneID)) |>
+    subset(!is.na(Gene)) |>
+    unique() |> arrange(Gene) |> pull(Gene) -> up_CSex4_genes_GOs
+message('Retrieved ', length(up_CSex4_genes_GOs), ' CSex4 up genes in top GO terms')
+```
+
+Define samples' genotype
+
+```{r, set samples genotype}
+WT_samples <- c("WTp", "WT#1a", "WT#1b", "WT#2")
+CSex4_samples <- c("CSex4#1", "CSex4#2")
+dEx4_samples <- c("∆ex4#1", "∆ex4#2")
+KO_samples <- c("KO#1", "KO#3a", "KO#3b", "KO#4")
+KOrL_samples <- c("KO+L#1", "KO+L#2")
+KOrS_samples <- c("KO+S#1", "KO+S#2")
+KOrL3D_samples <- c("KO+L-3D#1", "KO+L-3D#2")
+KOrS3D_samples <- c("KO+S-3D#1", "KO+S-3D#2")
+```
+
+Import RPKMs from the NPCs RNA-seq
+
+```{r, import RPKMs NPCs}
+import_rpkms(base_path = round22_rpkm_dir, file_name = 'A_B2_B_B3_RPKMs_paired.txt',
+             sample_order = c("WTp", "WT#1a", "CSex4#1", "CSex4#2", "∆ex4#1", "∆ex4#2",
+                              "KO#3a", "KO#4", "WT#1b", "WT#2", "KO#1", "KO#3b",
+                              "KO+L#1", "KO+L#2", "KO+S#1", "KO+S#2") ) |>
+  subset(!Pretty_Sample %in% c('KO#1', 'KO#4') ) |>
+  mutate(Genotype = case_when(Pretty_Sample %in% WT_samples ~ 'WT',
+                                Pretty_Sample %in% CSex4_samples ~ 'CSex4',
+                                Pretty_Sample %in% dEx4_samples ~ '∆ex4',
+                                Pretty_Sample %in% KO_samples ~ 'KO',
+                                Pretty_Sample %in% KOrL_samples ~ 'KO+L',
+                                Pretty_Sample %in% KOrS_samples ~ 'KO+S') ) |>
+    mutate(Genotype = factor(Genotype, levels = c('WT', 'CSex4', '∆ex4', 
+                                                  'KO', 'KO+L', 'KO+S') ) ) |>
+  relocate(Genotype, .before = external_gene_name) |> 
+  relocate(Pretty_Sample, .after = Genotype) -> df_rpkm
+```
+
+Display NPCs gene RPKMs.
+
+Since the `df_rpkm` dataframe with all the genes contains `r nrow(df_rpkm)` rows, I filter out the lowly expressed one and pick the most abundant one to display here below.
+
+```{r, prepare to display some gene in NPCs}
+df_rpkm |> 
+  group_by(external_gene_name) |> 
+  summarise(mean_rpkm = mean(RPKM, na.rm = T)) |>
+  subset(mean_rpkm >= 50) |>
+  pull(external_gene_name) |> unique() -> top_NPCs_genes_to_display
+message('Filtering to display ', length(top_NPCs_genes_to_display), ' genes')
+```
+
+Display this info as an interactive searchable data table
+
+```{r, show the top expressed NPCs}
+df_rpkm |>
+  subset(external_gene_name %in% top_NPCs_genes_to_display) |>
+  mutate(across(.cols = 'RPKM', .fns = \(x) round(x, digits = 3)  ) ) |>
+  datatable(rownames = FALSE, filter = 'top', 
+            options = list(pageLength = 5, autoWidth = TRUE) )
+```
+
+Filter RPKMs for the genes found in the significantly enriched GO terms in the CSex4 upregulated genes.
+
+```{r, filter RPKMs}
+df_rpkm |>
+  subset(external_gene_name %in% up_CSex4_genes_GOs) -> df_fltrd_rpkm
+```
+
+Show the RPKMs in the genes found in the GO terms enriched in the up-regulated genes of CSex4. 
+
+::: {.callout-tip collapse="true" title="Type of genes up-regulated in CSex4 NPCs"}
+Start typing in the external gene name column `Prl` and see how many Prolactin genes are up-regulated in NPCs.
+:::
+
+```{r, show NPCs RPKMs of go terms genes in CSex4 }
+df_fltrd_rpkm |>
+  mutate(across(.cols = 'RPKM', .fns = \(x) round(x, digits = 3)  ) ) |>
+  datatable(rownames = FALSE, filter = 'top', 
+            options = list(pageLength = 5, autoWidth = TRUE) )
+```
+
+Show up genes as boxplot
+
+```{r, make figure S7B, fig.width = 2, fig.height = 1.85}
+df_fltrd_rpkm |> 
+  mutate(log2_RPKM = log2(RPKM)) |>
+  subset(!is.na(log2_RPKM)) |>
+  subset(is.finite(log2_RPKM)) -> df_fltrd_rpkm_log2
+
+num_go_genes_CSex4_up <- length(unique(df_fltrd_rpkm_log2$external_gene_name))
+ggplot(df_fltrd_rpkm_log2) +
+  aes(x = Genotype, y = log2_RPKM, fill = Genotype) +
+  geom_boxplot(show.legend = F, outlier.shape = NA, width = 0.75, linewidth  = 0.2) +
+  scale_fill_manual(values = genotype_palette) + 
+  labs(y = expression("RPKM (" ~ log[2] ~ ")" ) ) +
+  th_neuro -> p_CSex4_up_go_gene
+p_CSex4_up_go_gene
+```
+
+Save to pdf.
+
+```{r, save to pdf S7B}
+ggsave(filename = paste0("FigS7B_Expression_GO_genes_CSex4_up_n", num_go_genes_CSex4_up, ".pdf"),
+       device = cairo_pdf,  path = pdf_dir_fig, units = 'cm', width = 4.1, height = 5)
+```
+
+Reshape these genes into a matrix.
+
+```{r, reshape dataframe inot a matrix}
+df_fltrd_rpkm |>
+  pivot_wider(id_cols = external_gene_name, names_from = Pretty_Sample, values_from = RPKM) |>
+  column_to_rownames('external_gene_name') |>
+  as.matrix() -> mat_rpkm_reps
+```
+
+z-Score the matrix and remove non-finite genes that arise from the scaling due to division by zero (rowSds = 0).
+
+```{r, scale the matrix}
+scld_mat_rpkm_reps <- (mat_rpkm_reps - rowMeans(mat_rpkm_reps)) / matrixStats::rowSds(mat_rpkm_reps)
+
+scld_mat_rpkm_reps <- scld_mat_rpkm_reps[which(apply(scld_mat_rpkm_reps, 1, function(x) { all(is.finite(x)) } )), ]
+
+message('Num of genes in rows: ', nrow(scld_mat_rpkm_reps), "\n",
+        'Num of samples in columns: ', ncol(scld_mat_rpkm_reps))
+```
+
+Prepare a colour palette. Use `floor` and `ceiling` to deal with even/odd length palette lengths
+
+```{r, set heatmap palette and breaks}
+palette_high_low <- colorRampPalette(colors = c('#1D3557', "white",  '#E63945'))(20)
+paletteLength <- length(palette_high_low)
+
+breaks_mat_mean <- c(seq( min(scld_mat_rpkm_reps), 0, length.out = ceiling(paletteLength / 2) + 1),
+                     seq( max(scld_mat_rpkm_reps) / paletteLength, max(scld_mat_rpkm_reps),
+                          length.out = floor(paletteLength / 2)) )
+```
+
+Plot heatmap
+
+```{r, plot CSex4 genes in go terms as heatmap, fig.width = 9.35, fig.height = 2.5, warning = FALSE}
+pheatmap(mat = t(scld_mat_rpkm_reps), color = palette_high_low, cellwidth = 8,
+         cellheight = 8, border_color = 'grey16', fontsize_col = 8,
+         breaks = breaks_mat_mean, fontsize = 5, cluster_rows = T,
+         cluster_cols = T, show_colnames = T, treeheight_col = 0, 
+         treeheight_row = 50)
+```
+
+Save to pdf.
+
+```{r, save heatmap to pdf, fig.width = 9.35, fig.height = 2.5, warning = FALSE}
+pdf.options(encoding = 'ISOLatin2.enc')
+pdf(file = file.path(pdf_dir_fig, paste0("FigExtra_RPKMs_UP_CSex4_genes_zScore_heatmap_n", 
+                                         nrow(scld_mat_rpkm_reps), ".pdf") ),
+    width = 9.35, height = 2.5)
+pheatmap(mat = t(scld_mat_rpkm_reps), color = palette_high_low, cellwidth = 8,
+         cellheight = 8, border_color = 'grey16', fontsize_col = 8,
+         breaks = breaks_mat_mean, fontsize = 5, cluster_rows = T,
+         cluster_cols = T, show_colnames = T, treeheight_col = 0, 
+         treeheight_row = 50)
+dev.off()
+```
+
+Now check all up-regulated genes in CSex4.
+
+```{r, import res from CSex4 and get up-regualted genes}
+import_res(CSx4_path_NPC) |>
+  subset(direction == 'UP') |>
+  pull(external_gene_name) |> unique() -> up_CSex4_genes
+```
+
+Reshape all up-genes into a matrix.
+
+```{r, reshape up-genes into a matrix}
+df_rpkm |>
+  subset(external_gene_name %in% up_CSex4_genes) -> df_fltrd_rpkm
+
+df_fltrd_rpkm |>
+  pivot_wider(id_cols = external_gene_name, names_from = Pretty_Sample, values_from = RPKM) |>
+  column_to_rownames('external_gene_name') |>
+  as.matrix() -> mat_rpkm_reps
+
+scld_mat_rpkm_reps <- (mat_rpkm_reps - rowMeans(mat_rpkm_reps)) / matrixStats::rowSds(mat_rpkm_reps)
+
+scld_mat_rpkm_reps <- scld_mat_rpkm_reps[which(apply(scld_mat_rpkm_reps, 1, function(x) { all(is.finite(x)) } )), ]
+
+message('Num of genes in rows: ', nrow(scld_mat_rpkm_reps), "\n",
+        'Num of samples in columns: ', ncol(scld_mat_rpkm_reps))
+
+breaks_mat_mean <- c(seq( min(scld_mat_rpkm_reps), 0, length.out = ceiling(paletteLength / 2) + 1),
+                     seq( max(scld_mat_rpkm_reps) / paletteLength, max(scld_mat_rpkm_reps), 
+                          length.out = floor(paletteLength / 2)) )
+```
+
+Plot heatmap of all up-regulate genes.
+
+```{r, make a heatmap of all up-regulated genes in CSex4, fig.width = 9.35, fig.height = 2.5, warning = FALSE}
+pheatmap(mat = t(scld_mat_rpkm_reps), color = palette_high_low,
+         breaks = breaks_mat_mean, fontsize = 5, cluster_rows = T, 
+         border_color = NA, cluster_cols = T, show_colnames = F, 
+         treeheight_col = 0, treeheight_row = 10)
+```
+
+Nice to see how the ∆ex4, WT, and KO+S are all very similar and close to each other.
+
+```{r, save this heatmap to pdf, fig.width = 9.35, fig.height = 2.5, warning = FALSE}
+pdf.options(encoding = 'ISOLatin2.enc')
+pdf(file = file.path(pdf_dir_fig, paste0("FigExtra_RPKMs_UP_CSex4_genes_zScore_heatmap_n", 
+                                         nrow(scld_mat_rpkm_reps), ".pdf") ),
+    width = 9.35, height = 2.5)
+pheatmap(mat = t(scld_mat_rpkm_reps), color = palette_high_low,
+         breaks = breaks_mat_mean, fontsize = 5, cluster_rows = T, 
+         border_color = NA, cluster_cols = T, show_colnames = F, 
+         treeheight_col = 0, treeheight_row = 10)
+dev.off()
+```
+
+## PCA
+
+Make a metadata dataframe to use for colouring the samples in the PCA
+
+```{r, make a mtdf for PCA}
+data.frame(Pretty_Sample = c('WTp', 'WT#1a', 'CSex4#1', 'CSex4#2',
+                             '∆ex4#1', '∆ex4#2', 'KO#3a',
+                             'WT#1b', 'WT#2', 'KO#3b',
+                             'KO+L#1', 'KO+L#2', 'KO+S#1', 'KO+S#2'),
+           Genotype = c(rep('WT', 2), rep('CSex4', 2), rep('∆ex4', 2),
+                        rep('KO', 1), rep('WT', 2), rep('KO', 1),
+                        rep('KO+L', 2), rep('KO+S', 2) ) ) -> mtdt_npc
+
+mtdt_npc$Pretty_Sample <- factor(mtdt_npc$Pretty_Sample, levels = mtdt_npc$Pretty_Sample )
+mtdt_npc$Genotype <- factor(mtdt_npc$Genotype, levels = unique(mtdt_npc$Genotype) )
+```
+
+Make a PCA to check samples
+
+```{r, turn rpkms into a matrix for PCA}
+df_rpkm |>
+  pivot_wider(id_cols = external_gene_name, names_from = Pretty_Sample, values_from = RPKM) |>
+  column_to_rownames('external_gene_name') |>
+  as.matrix() -> mat_all_rpkm_reps
+
+# filter for row means >= 10
+mat_fltrd_rpkm_reps <- (mat_all_rpkm_reps[(rowMeans(mat_all_rpkm_reps) >= 10), ])
+```
+
+PCA 1 vs 2
+```{r, PCA 1 vs 2, fig.width = 7, fig.height = 3}
+showme_PCA2D(mat = mat_fltrd_rpkm_reps, mt = mtdt_npc, mcol = 'Pretty_Sample', 
+             m_label = 'Pretty_Sample', scale. = T, 
+             n_top_var = 1000, m_fill = 'Genotype') + scale_fill_manual(values = genotype_palette)
+```
+
+PCA 1 vs 3
+
+```{r, PCA 1 vs 3, fig.width = 7, fig.height = 2.4}
+showme_PCA2D(mat = mat_fltrd_rpkm_reps, y = 3, mt = mtdt_npc, mcol = 'Pretty_Sample', 
+             m_label = 'Pretty_Sample', scale. = T, 
+             n_top_var = 1000, m_fill = 'Genotype') + scale_fill_manual(values = genotype_palette)
+```
+
+PCA 2 vs 3
+```{r, PCA 2 vs 3, fig.width = 7, fig.height = 5.5}
+showme_PCA2D(mat = mat_fltrd_rpkm_reps, x = 2, mt = mtdt_npc, mcol = 'Pretty_Sample', 
+             m_label = 'Pretty_Sample', scale. = T, 
+             n_top_var = 1000, m_fill = 'Genotype') + scale_fill_manual(values = genotype_palette)
+```
+
+Show variance explained by each principal component. 
+
+```{r, show PC var, fig.width = 7, fig.height = 4}
+showme_PCA2D(mat = mat_fltrd_rpkm_reps, scale. = T, 
+             n_top_var = 1000, show_variance = T, real_aspect_ratio = F,
+             mt = mtdt_npc, mcol = 'Pretty_Sample', 
+             m_label = 'Pretty_Sample',
+             m_fill = 'Genotype') + scale_fill_manual(values = genotype_palette)
+```
+
+## Neurons
+
+Import data from the neuronal quantification. 
+
+```{r, import neuronal imaging quantification data}
+measurments_path <- file.path(tbl_dir_fig, 'Neuronal_Nuclei_Measurments.tab')
+
+neurons_measurments <- read_delim(file = measurments_path, delim = '\t', 
+                                  quote = '', col_names = T, show_col_types = FALSE) |>
+  mutate(Area_Perim = Area/Perimeter)
+
+neurons_measurments$Genotype <- factor(neurons_measurments$Genotype, 
+                                       levels = c('WT', 'CSex4', '∆ex4', 'KO', 'KO+L', 'KO+S')) 
+```
+
+Calculate basic stats
+
+```{r, test for significance}
+neurons_measurments |>
+  wilcox_test(formula = Area ~ Genotype, ref.group = 'WT', paired = F, p.adjust.method = 'BH', 
+              exact = T, alternative = 'two.sided') |>
+  mutate(p = signif(p, 1)) |>
+  mutate(p_signif = case_when(p < 2.2e-16 ~ paste0("list(~italic(p)", "<2.2%.%10^-16", ")" ),
+                              between(p, left = 2.2e-16, right = 0.05) ~ paste0("list(~italic(p)==", p, ")" ),
+                              p >= 0.05 ~ 'list(~italic(N.S.))') ) |>
+  mutate(p_signif = gsub("e-", "%.%10^", p_signif)) |>
+  select(group1, group2, n1, n2, p, p_signif)  -> p_anno_df
+
+neurons_measurments |>
+    cohens_d(formula = Area ~ Genotype, var.equal = T, ref.group = "WT", paired = F) |>
+    select(group1, group2, effsize, magnitude) |>
+    mutate(effsize =  paste0("list(~d==", abs(signif(effsize, 2)) ,")") ) |>
+    left_join(x = p_anno_df, by = c("group1", "group2") ) |>
+    mutate(signig_label = paste0( gsub(")$", "", p_signif), gsub("^list\\(", "", effsize) ) ) |>
+    relocate(signig_label, .after = group2) -> p_anno_df
+```
+
+Plot area of the neuronal nuclei as boxplot.
+
+```{r, make figure 7G, fig.width = 1.85, fig.height = 2, warning = FALSE}
+ggplot(neurons_measurments) +
+  aes(x = Genotype, y = log2(Area), fill = Genotype ) + #  group = interaction(Sample, ROI)
+  geom_boxplot(show.legend = F, linewidth  = 0.15, outlier.shape = NA, width = 0.85) +
+  # geom_violin(draw_quantiles = 0.5, show.legend = F, linewidth  = 0.2) +
+  # geom_sina(shape = 21, size = 0.5, stroke = 0.2) +
+  geom_signif(comparisons = list( c("WT", "CSex4"), c("WT", "∆ex4"), 
+                                  c("WT", "KO"), c("WT", "KO+L"), c("WT", "KO+S")), 
+              y_position = seq(8.5, 12, by = 0.75),
+            parse = T, annotations = p_anno_df$signig_label,
+            textsize = 2, family = "Arial", lwd = 0.2, vjust = 0.2,
+            tip_length = 0.02)  +
+  scale_x_discrete(expand = expansion(mult = c(0.13, 0.01), add = 0)) +
+  scale_y_continuous( n.breaks = 10, limits = c(3, 12.75), expand = expansion(mult = 0, add = 0)) +
+  scale_fill_manual(values = genotype_palette)  +
+  labs(y = expression("Nuclei area (" ~ log[2] ~ ")" ) ) +
+  th_neuro -> p_area
+p_area
+```
+
+Save area plot to pdf.
+
+```{r, save neuronal area to plot}
+ggsave(filename = 'Fig7G_Neurons_Nuclei_Area_Boxplot.pdf', 
+       plot = p_area, device = cairo_pdf, units = 'cm',
+       path = pdf_dir_fig, width = 4.3, height = 4.75)
+```
+
+Plot other parameters and split the genotypes in each ROI (i.e. the cover-slide that was imaged or different field of view).
+
+**Nuclear Perimeter** (log2)
+
+```{r, plot extra parameter - perimenter, fig.width = 1.85, fig.height = 2}
+ggplot(neurons_measurments) +
+  aes(x = Genotype, y = log2(Perimeter), fill = Genotype, group = interaction(Sample, ROI) ) +
+  geom_boxplot(show.legend = F, linewidth  = 0.15, outlier.shape = NA, width = 0.75) +
+  scale_x_discrete(expand = expansion(mult = c(0.13, 0.01), add = 0)) +
+  # scale_y_continuous( n.breaks = 10, expand = expansion(mult = 0, add = 0)) +
+  scale_fill_manual(values = genotype_palette)  +
+  labs(y = expression("Nuclear perimeter (" ~ log[2] ~ ")" ) ) +
+  th_neuro -> p_perimeter
+p_perimeter
+```
+
+**Nuclear aspect ratio** 
+
+```{r, plot extra parameter - aspect ratio, fig.width = 1.85, fig.height = 2}
+ggplot(neurons_measurments) +
+  aes(x = Genotype, y = AspectRatio, fill = Genotype, group = interaction(Sample, ROI) ) +
+  geom_boxplot(show.legend = F, linewidth  = 0.15, outlier.shape = 21, 
+               width = 0.75, outlier.size = 0.75, outlier.stroke = 0.2) +
+  scale_x_discrete(expand = expansion(mult = c(0.13, 0.01), add = 0)) +
+  scale_y_continuous( n.breaks = 10, expand = expansion(mult = c(0, 0.05), add = 0)) +
+  scale_fill_manual(values = genotype_palette)  +
+  coord_cartesian(ylim = c(0, NA)) +
+  labs(y = expression("Nuclear aspect ratio" ) ) +
+  th_neuro -> p_AR
+p_AR
+```
+
+Save to pdf aspect ratio of neurons nuclei
+
+```{r, save neuronal nuclei aspect ratio to plot}
+ggsave(filename = 'FigExtra_Neurons_Nuclei_AspectRatio_Boxplot.pdf', plot = p_AR, device = cairo_pdf, 
+       path = pdf_dir_fig, width = 1.75, height = 1.75)
+```
+
+**Area over perimeter**
+
+```{r, plot extra parameter - area over perimeter,fig.width = 1.85, fig.height = 2}
+ggplot(neurons_measurments) +
+  aes(x = Genotype, y = Area_Perim, fill = Genotype, group = interaction(Sample, ROI) ) +
+  geom_boxplot(show.legend = F, linewidth  = 0.15, outlier.shape = 21, 
+               width = 0.75, outlier.size = 0.75, outlier.stroke = 0.2) +
+  scale_x_discrete(expand = expansion(mult = c(0.13, 0.01), add = 0)) +
+  scale_y_continuous( n.breaks = 10, expand = expansion(mult = c(0, 0.05), add = 0)) +
+  scale_fill_manual(values = genotype_palette)  +
+  coord_cartesian(ylim = c(0, NA)) +
+  labs(y = expression("Nuclear area / perimeter" ) ) +
+  th_neuro -> p_area_perimeter
+p_area_perimeter
+```
+
+Save to pdf area divided by perimeter of neurons nuclei
+
+```{r, save neuronal area over perimeter to plot}
+ggsave(filename = 'FigExtra_Neurons_Nuclei_AreaPerimeter_Boxplot.pdf', plot = p_area_perimeter, 
+       device = cairo_pdf, 
+       path = pdf_dir_fig, width = 1.75, height = 1.75)
+```
+
+# Supplementary Figure Panels
+
+## MA plots NPCs
+
+Manually invert KO vs WT because it's done as WT vs KO right now.
+```{r, MA plot KO NPC}
+# plot_MA_fig(file_path = KO_path_NPC, sample_name_contrast = 'KO', Panel_Num = 'S6X', Y_lim = c(-10, 10))
+```
+
+MA plot NPCs KO+L
+
+```{r, MA plot KOrL NPC, fig.width = 4, fig.height = 3}
+plot_MA_fig(file_path = KOrL_path_NPC, sample_name_contrast = 'KO+L', Panel_Num = 'Extra', Y_lim = c(-10, 10))
+```
+
+MA plot NPCs KO+S
+
+```{r, MA plot KOrS NPC, fig.width = 4, fig.height = 3}
+plot_MA_fig(file_path = KOrS_path_NPC, sample_name_contrast = 'KO+S', Panel_Num = 'Extra', Y_lim = c(-10, 10))
+```
+
+## DEG counts NPCs
+
+Calculate number of DEGs in NPCs
+
+```{r, Extract number of DEGs NPCs}
+rbind( summarise_DEGs(file_path = dEx4_path_NPC, sample_name_contrast = '∆ex4'),
+       summarise_DEGs(file_path = CSx4_path_NPC, sample_name_contrast = 'CSex4'),
+       summarise_DEGs(file_path = KO_path_NPC, sample_name_contrast = 'KO'),
+       summarise_DEGs(file_path = KOrL_path_NPC, sample_name_contrast = 'KO+L'),
+       summarise_DEGs(file_path = KOrS_path_NPC, sample_name_contrast = 'KO+S') ) |> 
+  subset(direction != 'NONE') |>
+  mutate(sample = str_remove(pattern = '_vs_WT', contrast)) |>
+  mutate(sample = factor(sample, levels = c('CSex4', '∆ex4', 'KO', 'KO+L', 'KO+S') ) ) |>
+  mutate(Num_genes = ifelse(direction == 'DOWN', yes = -Num_genes, no = Num_genes) ) -> num_genes_df_NPCs
+```
+
+Plot number of differentially expressed genes (DEGs) per condition / WT (figure S6E)
+
+```{r, Make figure S7A NPCs, fig.width = 2, fig.height = 2.5}
+txt_size <- 1.55
+ggplot(num_genes_df_NPCs) +
+  aes(x = sample, y = Num_genes, fill = direction) +
+  geom_col(colour = 'black', width = 0.75, linewidth = 0.15) +
+  geom_text(data = subset(num_genes_df_NPCs, direction == 'UP'), 
+            aes(label = Num_genes), vjust = -1, family = "Arial", size = txt_size) +
+  geom_text(data = subset(num_genes_df_NPCs, direction == 'DOWN'), 
+            aes(label = abs(Num_genes)), vjust = 1.5, family = "Arial", size = txt_size) +
+  scale_y_continuous(n.breaks = 10, expand = expansion(mult = c(0.03, 0), add = 0) ) +
+  scale_fill_manual(values = c('UP' = '#E63945', 'DOWN' = '#1D3557'),
+                    labels = c('Down', 'Up'), name = "Diff. expr. genes") +
+  coord_cartesian(ylim = c(-3750, 3750), clip = 'off' ) +
+  labs(y = "Number DEGs") + DEG_counts_barplot_th -> p_Num_DEGs_NPCs
+p_Num_DEGs_NPCs
+```
+
+Save to pdf.
+
+```{r, save figure S7A bar plot of DEGs }
+ggsave(path = pdf_dir_fig, plot = p_Num_DEGs_NPCs, device = cairo_pdf, units = "cm",
+       filename = "FigS7A_BarPlot_Quantification_DEGs.pdf",
+       width = 5, height = 4)
+```
+
+## Repression index NPCs
+
+Calculate rescue efficiency ratio (a.k.a. *repression index* for *Suz12*) in NPCs similar to how it was done for NPCs.
+
+One caveat of this analysis is that the rescue index here is calculated on genes that are *Suz12* targets in mESCs, since we don't have SUZ12 ChIP-seq data that a compromise we had to do.
+
+```{r, make a mtdf for repression index}
+data.frame(Pretty_Sample = c('WTp', 'WT#1a', 'CSex4#1a', 'CSex4#1b',
+                             '∆ex4#1', '∆ex4#2', 'KO#3a', 'KO#4',
+                             'WT#1b', 'WT#2', 'KO#1', 'KO#3b',
+                             'KO+L#1', 'KO+L#2', 'KO+S#1', 'KO+S#2'),
+           Genotype = c(rep('WT', 2), rep('CSex4', 2), rep('∆ex4', 2),
+                        rep('KO', 2), rep('WT', 2), rep('KO', 2),
+                        rep('KO+L', 2), rep('KO+S', 2) ) ) -> mtdt_npc
+
+mtdt_npc$Pretty_Sample <- factor(mtdt_npc$Pretty_Sample, levels = mtdt_npc$Pretty_Sample )
+mtdt_npc$Genotype <- factor(mtdt_npc$Genotype, levels = unique(mtdt_npc$Genotype) )
+```
+
+Import RPKMs of NPCs
+
+```{r, import NPCs RPKMs}
+rpkm_npc <- import_rpkms(base_path = round22_rpkm_dir,
+                        file_name = 'A_B2_B_B3_RPKMs_paired.txt',
+                        sample_order = c('WTp', 'WT#1a', 'CSex4#1a', 'CSex4#1b',
+                                         '∆ex4#1', '∆ex4#2', 'KO#3a', 'KO#4',
+                                         'WT#1b', 'WT#2', 'KO#1', 'KO#3b',
+                                         'KO+L#1', 'KO+L#2', 'KO+S#1', 'KO+S#2')) |>
+  left_join(y = mtdt_npc, by = join_by(Pretty_Sample) ) |>
+  mutate(Pretty_Sample = factor(Pretty_Sample, levels = mtdt_npc$Pretty_Sample)) |>
+  relocate(Genotype, .before = Pretty_Sample) |>
+  print(3)
+```
+
+Check *Suz12* expression levels in NPCs
+```{r, Suz12 expression level in NPCs, fig.width = 3, fig.height = 2}
+subset(rpkm_npc, external_gene_name == 'Suz12') |>
+  ggplot() +
+  aes(x = Genotype, y = RPKM, fill = Genotype) +
+  geom_boxplot(show.legend = F, linewidth = 0.2, outlier.shape = NA) +
+  geom_point(show.legend = F, size = 0.75) +
+  scale_fill_manual(values = genotype_palette) +
+  scale_y_continuous(limits = c(0, NA), n.breaks = 6 ) +
+  theme_classic() +
+  theme(axis.text = element_text(colour = 'black'),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank(),
+        panel.grid.major.y = element_line(colour = 'gray84', linewidth = 0.2))
+```
+
+Filter only for samples used in the analysis
+
+```{r, set which samples to discard}
+discard_samples <- c('WTp', 'WT#1a', 'CSex4#1a', 'CSex4#1b',
+                     '∆ex4#1', '∆ex4#2','KO#4', 'KO#1')
+rpkm_npc <- subset(rpkm_npc, !Pretty_Sample %in% discard_samples) 
+```
+
+Apply rescue index formula to genes that have at least a mean expression higher than zero across all samples and that are up-regulated in SUZ12-KO
+
+Get genes up in KO. Note here the contrast was inverted where KO is the reference, so the UP regulated genes in the KO are the "down" regulated (meaning more expressed in KO and less expressed in WT)
+
+```{r, get KO DEGs in NPCs}
+KO_path_NPC <- file.path(round22_deseq2_dir, 'A-3_KO_B-3_WT_stats_paired.txt')
+
+KO_NPC <- read_delim(file = KO_path_NPC, delim = '\t', show_col_types = F)
+signif_thrshld <- 0.05
+# annotate res
+KO_NPC |>
+    mutate(signif = case_when(padj <= signif_thrshld ~ 'YES',
+                              padj > signif_thrshld ~ 'NO') ) |>
+    mutate(direction = case_when(signif == 'YES' & log2FoldChange >= 0 ~ 'UP',
+                                 signif == 'YES' & log2FoldChange < 0 ~ 'DOWN',
+                                 signif == 'NO' | is.na(padj) ~ 'NONE') ) |>
+    # order point for plotting
+    mutate(direction = factor(direction, levels = c('NONE', 'UP', 'DOWN'))) |>
+    arrange(direction) |> # baseMean
+    # filter out missing values for the plot
+    subset(!is.na(log2FoldChange)) |>
+    subset(!is.na(baseMean)) -> KO_NPC
+
+# Get only the DEGs in KO 
+up_in_ko <- subset(KO_NPC, direction == "DOWN")$external_gene_name
+dn_in_ko <- subset(KO_NPC, direction == "UP")$external_gene_name
+length(up_in_ko)
+length(dn_in_ko)
+stopifnot(!any(up_in_ko %in% dn_in_ko))
+# check how may are Suz12 targeted genes in ESCs
+Suz12_CGI_targets <- read_delim(Suz12_CGI_targets_path, delim = '\t', 
+                                show_col_types = FALSE, col_names = 'external_gene_name')$external_gene_name
+
+message('Genes targeted by SUZ12 in mESCs: ', length(Suz12_CGI_targets) )
+
+Suz12_CGI_targets_inESCs_KO_UP <- Suz12_CGI_targets[which(Suz12_CGI_targets %in% c(up_in_ko))]
+message('Genes targeted by SUZ12 in mESCs UP-regulated in NPCs: ', length(Suz12_CGI_targets_inESCs_KO_UP) )
+
+Suz12_CGI_targets_inESCs_KO_DO <- Suz12_CGI_targets[which(Suz12_CGI_targets %in% c(dn_in_ko))]
+message('Genes targeted by SUZ12 in mESCs DOWN-regulated in NPCs: ', length(Suz12_CGI_targets_inESCs_KO_DO) )
+# sanity check
+stopifnot(!any(Suz12_CGI_targets_inESCs_KO_UP %in% Suz12_CGI_targets_inESCs_KO_DO))
+```
+
+Filter genes that are not expressed.
+
+```{r, remove non-expressed genes in NPCs}
+rpkm_npc |>
+ subset(external_gene_name %in% up_in_ko) |>
+  group_by(external_gene_name) |>
+  mutate(gene_expression = mean(RPKM, na.rm = TRUE)) |>
+  subset(gene_expression > 0) |>
+  select(-gene_expression) |>
+  ungroup() -> rpkm_npc_fltrd
+```
+
+Filter out genes with zero RPKMs has those give NaN RER.
+
+```{r, calculate RER}
+rpkm_npc_fltrd |>
+  group_by(external_gene_name, Genotype) |>
+  mutate(Mean_rpkms = mean(RPKM, na.rm = TRUE)) |>
+  ungroup() |>
+  group_by(external_gene_name) |>
+  arrange(desc(Mean_rpkms)) |>
+  # scale RPKMs with an extra pseudocount
+  mutate(Mean_rpkms = log2(Mean_rpkms + 0.1) ) |>
+  select(-c(Pretty_Sample, RPKM)) |>
+  unique() |>
+  mutate(Mean_rpkms_WT = Mean_rpkms[Genotype == "WT"] ) |>
+  # filter for genes that are at least expressed in WT
+  subset(Mean_rpkms_WT > 0 ) |>
+  # how much a rescue is similar to a WT
+  mutate(Difference_to_WT = Mean_rpkms - Mean_rpkms[Genotype == "WT"]) |>
+  # How much a gene is changed in KO
+  mutate(Difference_KO_WT = Mean_rpkms[Genotype == "KO"] - Mean_rpkms[Genotype == "WT"] ) |>
+  mutate(RATIO = Difference_to_WT/Difference_KO_WT) |>
+  # Rescue Efficiency Ratio
+  mutate(RER = (10^-RATIO) ) |>
+  ungroup() |>
+  print(n = 5 ) -> rer_rpkm
+```
+
+```{r, eval = FALSE}
+# Show some examples
+rer_rpkm |>
+  pivot_longer(cols = c(Mean_rpkms, Difference_to_WT, Difference_KO_WT, RATIO, RER),
+               names_to = "Calculus", values_to = "Value") |>
+  subset(external_gene_name %in% c("Myl9", 'Krt18', 'Bmp4') ) |>
+  ggplot() +
+  aes(x = Genotype, y = Value, fill = Genotype)+
+  facet_grid(Calculus ~ external_gene_name, scales = "free_y") +
+  geom_col(show.legend = F) +
+  scale_fill_manual(values = genotype_palette )  +
+  theme_bw()
+```
+
+Reshape RER to wide for plot. 
+```{r, reshape RER}
+rer_rpkm |>
+  dplyr::select(external_gene_name, Genotype, RER) |>
+  pivot_wider(id_cols = c(external_gene_name), 
+              names_from = Genotype, values_from = RER) |>
+  print(3) -> rer_wide 
+
+# nrow(rer_wide[which(!is.finite(rer_wide$`KO+S`)), ])
+# nrow(rer_wide[which(!is.finite(rer_wide$`KO+L`)), ])
+```
+
+Plot rescue index scatter plot for figure S7D.
+
+```{r, make figure S7D - scatter}
+max_rer <- 5
+rer_wide |>
+ggplot() +
+  aes(x = `KO+L`, y = `KO+S`) +
+  geom_hline(yintercept = 1, linewidth = 0.1, colour = "black" ) +
+  geom_vline(xintercept = 1, linewidth = 0.1, colour = "black" ) +
+  geom_abline(slope = 1, intercept = 0, linetype = 'dashed', linewidth = 0.1 ) +
+  geom_point(fill = 'gray50', size = 0.75, shape = 21, stroke = 0.2, alpha = 1) +
+  geom_density2d(colour = 'black', linewidth = 0.1, contour_var = "count", alpha = 0.5) +
+  coord_cartesian(clip = 'off') +
+  scale_x_continuous(breaks = c(seq(0, max_rer, 1)), oob = scales::oob_squish,
+                     expand = expansion(add = 0.1, mult = c(0, 0.01) ),
+                     limits = c(0, max_rer))  +
+  scale_y_continuous(breaks = c(seq(0, max_rer, 1)), oob = scales::oob_squish,
+                     expand = expansion(add = 0.1, mult = c(0, 0.01) ),
+                     limits = c(0, max_rer) ) +
+  theme_classic(base_size = 5, base_family = "Arial") +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_line(linewidth = 0.2),
+        axis.ticks = element_line(linewidth = 0.2),
+        axis.ticks.length = unit(1, "mm"),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_line(linewidth = 0.2),
+        strip.background = element_blank(),
+        legend.position = 'none',
+        legend.key.size = unit(1, "mm"),
+        plot.background = element_blank(),
+        plot.title = element_text(size = 5.5)
+  ) -> p_scatter
+```
+
+Make density plot KO+S
+
+```{r, make figure S7D - KO+S density}
+ggplot(rer_wide) +
+  aes(x = `KO+S`, y = -after_stat(scaled)) +
+  coord_flip() +
+  geom_density(fill = '#F07E19', linewidth = 0.1) +
+  scale_x_continuous(oob = scales::oob_squish,
+                     breaks = c(seq(0, max_rer, 1)),
+                     expand = expansion(add = 0.1, mult = c(0, 0.01)) ,
+                     limits = c(0, max_rer) ) +
+  geom_vline(xintercept = 0, linewidth = 0.1, colour = "black" ) +
+  geom_vline(xintercept = 1, linewidth = 0.1, colour = "black" ) +
+  labs(x = "Suz12-S Repression Index") +
+  theme_classic(base_size = 5, base_family = "Arial") +
+  theme(axis.text = element_text(colour = 'black'),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.line = element_line(linewidth = 0.2),
+        axis.ticks = element_line(linewidth = 0.2),
+        axis.ticks.length = unit(1, "mm"),
+        axis.ticks.x =  element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        strip.background = element_blank(),
+        legend.position = 'none',
+        legend.key.size = unit(1, "mm"),
+        plot.background = element_blank(),
+        plot.title = element_text(size = 5.5) ) -> p_density_S
+```
+
+Make density plot KO+L
+
+```{r, make figure S7D - KO+L density}
+ggplot(rer_wide) +
+  aes(x = `KO+L`, y = -after_stat(scaled)) +
+  geom_density(fill = '#7B67AB', linewidth = 0.1) +
+  geom_vline(xintercept = 1, linewidth = 0.1, colour = "black" ) +
+  geom_vline(xintercept = 0, linewidth = 0.1, colour = "black" ) +
+  scale_x_continuous(breaks = c(seq(0, max_rer, 1)),
+                     oob = scales::oob_squish,
+                     expand = expansion(add = 0.1, mult = c(0, 0.01) ),
+                     limits = c(0, max_rer)) +
+  labs(x = "Suz12-L Repression Index") +
+  theme_classic(base_size = 5, base_family = "Arial") +
+  theme(axis.text = element_text(colour = 'black'),
+        axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line = element_line(linewidth = 0.2),
+        axis.ticks = element_line(linewidth = 0.2),
+        axis.ticks.length = unit(1, "mm"),
+        axis.ticks.y =  element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        strip.background = element_blank(),
+        legend.position = 'none',
+        legend.key.size = unit(1, "mm"),
+        plot.background = element_blank(),
+        plot.title = element_text(size = 5.5) ) -> p_density_L
+```
+
+Test for significance
+
+```{r, test NPC rer}
+# significant test
+# ks.test(x = rer_wide$`KO+L`, y = rer_wide$`KO+S`, paired = T, exact = T)
+pval_npc_rer <- wilcox.test(x = rer_wide$`KO+L`, y = rer_wide$`KO+S`, paired = T, exact = F)$p.val # if using exact = T I get NaN 
+signif(pval_npc_rer, 3)
+```
+
+Assemple figure S7D
+```{r, make figure S7D, fig.width = 2, fig.height = 2}
+p_rer_NPC <- p_density_S + p_scatter +  plot_spacer() + p_density_L  +
+  plot_layout(widths = c(1, 4), heights = c(4,1) )
+p_rer_NPC
+```
+
+Save to pdf.
+
+```{r, save to pdf S7D}
+num_genes <- length(unique(rer_wide$external_gene_name))
+
+ggsave(filename = paste0("FigS7D_Repression_Index_NPCs_n", num_genes, ".pdf"), plot = p_rer_NPC,
+       device = cairo_pdf,  path = pdf_dir_fig, units = 'cm', width = 4.5, height = 4.5)
+```
+
+## Upset Rescues
+
+```{r, import DESeq2 res of NPC RNA-seq}
+import_res(file_path = KO_path_NPC, invert_l2FC = T) |>
+  subset(signif) |>
+  pull(external_gene_name) -> KO_DEGs
+
+import_res(file_path = KOrL_path_NPC) |>
+  subset(signif) |>
+  pull(external_gene_name) -> KOrL_DEGs
+
+import_res(file_path = KOrS_path_NPC) |>
+  subset(signif) |>
+  pull(external_gene_name) -> KOrS_DEGs
+```
+
+Save an upset plot between all the 3 sets of DEGs
+
+```{r, save an upset plot of DEGs in rescues}
+pdf(file = file.path(pdf_dir_fig, paste0("FigExtra_Upset_DEG_Rescues.pdf") ),
+    width = 3, height = 3)
+UpSetR::upset(fromList(list(KO = KO_DEGs, `KO+L` = KOrL_DEGs, `KO+S` = KOrS_DEGs)),
+              order.by = 'freq')
+dev.off()
+```
+
+## GO terms SUZ12 KO and rescues
+
+KO up and down genes are intentionally inverted as the sample contrast order is inverted. 
+
+```{r, label = "Run SUZ12 KO DEGs GO terms analysis for up- and down-regulated genes"}
+up_genes_path <- file.path(round22_enrich_dir,
+                           "A-3_KO_B-3_WT_DOWNgenelist_paired.txt")
+do_genes_path <- file.path(round22_enrich_dir, 
+                           "A-3_KO_B-3_WT_UPgenelist_paired.txt")
+sample_name_contrast <- 'KO'
+
+GOs_KO <- run_enrichGO_UP_DOWN(up_genes_path = up_genes_path, 
+                               do_genes_path =  do_genes_path, 
+                               sample_name_contrast = sample_name_contrast)
+```
+
+GO terms analysis for KO+L
+
+```{r, label = "Run KO+L DEGs GO terms analysis for up- and down-regulated genes"}
+up_genes_path <- file.path(round22_enrich_dir,
+                           "A-3_WT_B-3_KO-L_UPgenelist_paired.txt")
+do_genes_path <- file.path(round22_enrich_dir,
+                           "A-3_WT_B-3_KO-L_DOWNgenelist_paired.txt")
+sample_name_contrast <- 'KO+L'
+
+GOs_KOrL <- run_enrichGO_UP_DOWN(up_genes_path = up_genes_path, 
+                                 do_genes_path = do_genes_path, 
+                                 sample_name_contrast)
+```
+
+GO terms analysis for KO+S
+
+```{r, label = "Run KO+S DEGs GO terms analysis for up- and down-regulated genes"}
+up_genes_path <- file.path(round22_enrich_dir,
+                           "A-3_WT_B-3_KO-S_UPgenelist_paired.txt")
+do_genes_path <- file.path(round22_enrich_dir,
+                           "A-3_WT_B-3_KO-S_DOWNgenelist_paired.txt")
+sample_name_contrast <- 'KO+S'
+
+GOs_KOrS <- run_enrichGO_UP_DOWN(up_genes_path = up_genes_path, 
+                                 do_genes_path, sample_name_contrast)
+```
+
+Merge results into one dataframe
+
+```{r, combine results into one dataframe}
+KOs_GOs <- rbind(GOs_KO, GOs_KOrL, GOs_KOrS) 
+```
+
+Now check the common GO terms:
+
+```{r, check common GOs}
+KOs_GOs |> 
+  group_by(Direction, ID, Description) |>
+  summarise(Num_GO_found = n(), .groups = 'keep' ) |>
+  subset(Num_GO_found >= 3) -> common_GOs
+
+# View(subset(KOs_GOs, ID %in% common_GOs$ID))
+```
+
+Show the most significant of the shared common GO terms and to limit the html widget overload filter only for biological processes ontology. Also remove the `geneID` column for simplicity.
+
+```{r, show the top shared GO between KOs NPCs}
+KOs_GOs |>
+subset(ID %in% common_GOs$ID & ONTOLOGY == "BP" & p.adjust < 0.0000001) |>
+  select(-geneID) |>
+  mutate(across(.cols = c(ends_with('value'), 'p.adjust'), .fns = \(x) signif(x, digits = 2)  ) ) |>
+  datatable(rownames = FALSE, filter = 'top', 
+            options = list(pageLength = 5, autoWidth = TRUE) )
+```
+
+Select most interesting and significant GO terms between all 3 conditions.
+
+```{r, select go terms}
+UP_GOs <- c('GO:0060537',  'GO:0010631', 'GO:0060485', 'GO:0016055')
+
+DOWN_GOs <- c('GO:0030900', 'GO:0007409', 'GO:0098978', 'GO:0050808')
+
+GOIs <- c(UP_GOs, DOWN_GOs)
+```
+
+Make a dataframe for plotting the shared GO terms from the up-regulated genes
+
+```{r, dataframe for plotting up GOs}
+KOs_GOs |>
+  subset(ID %in% UP_GOs) |>
+  subset(Direction == 'UP') -> df_UP
+```
+
+Make figure S7E
+
+```{r, make figure S7E, fig.width = 3, fig.height = 2}
+plot_heatmap_upset(df = df_UP, 
+                   htmp_min_col = '#fad7d9', 
+                   htmp_max_col = '#E63945',
+                   lgnd_mm = c(3.5, 1), 
+                   patch_rel_heights = c(5, 0.55),
+                   bar_num_nudge = 7, 
+                   k_text = 30)  -> p_up
+p_up
+```
+
+Save to pdf.
+
+```{r, save to PDF figure S7E}
+ggsave(filename = 'FigS7E_heatmap_upset_GO_UP.pdf', 
+       plot = p_up, device = cairo_pdf, path = pdf_dir_fig,
+       units = 'cm', width = 7, height = 5 )
+```
+
+Make a dataframe for plotting the shared GO terms from the up-regulated genes
+
+```{r, dataframe for plotting down GOs}
+KOs_GOs |>
+  subset(ID %in% DOWN_GOs) |>
+  subset(Direction == 'DOWN' ) -> df_DO
+```
+
+Make figure S7F.
+
+```{r, Make figure S7F, fig.width = 3, fig.height = 2}
+plot_heatmap_upset(df = df_DO, 
+                   htmp_min_col = '#C0CCDD', 
+                   htmp_max_col = '#305890',
+                   lgnd_mm = c(3, 1), 
+                   patch_rel_heights = c(5, 0.55),
+                   bar_num_nudge = 10
+                   ) -> p_down
+p_down
+```
+
+Save to pdf.
+
+```{r, save figure S7F }
+ggsave(filename = 'FigS7F_heatmap_upset_GO_down.pdf', 
+       plot = p_down, device = cairo_pdf, path = pdf_dir_fig,
+       units = 'cm', width = 7, height = 5 )
+```
+
+End of the analysis.
+
+# Session Info {#sec-sessioninfo}
+
+```{r, print session info}
+sessioninfo::session_info()
+```
