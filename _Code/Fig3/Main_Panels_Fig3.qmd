@@ -86,7 +86,8 @@ theme_bw(base_family = 'Arial', base_size = 6) +
         axis.ticks.length = unit(1, units = "mm"),
         legend.title = element_blank(),
         legend.text = element_text(margin = margin(t = 0, b = 0, unit = 'mm')),
-        legend.position = c(0.89, 0.96),
+        legend.position = 'inside',
+        legend.position.inside = c(0.89, 0.96),
         legend.spacing = unit(x = 0.1, units = 'mm'),
         legend.key.size = unit(x = 0.1, units = 'mm'),
         legend.background = element_rect(fill = "white", linewidth = 0, colour = NA),
@@ -126,7 +127,7 @@ Helper functions for the analysis of ColabFold predictions.
 euclidean_dist3D <- function(P1, P2) {
   
   # Assuming 2 points in a 3D space with coordinates:
-  # P1 <- c('x' = 29.187, 'y' = 76.150, 'z' = 54.973)
+  # P1 <- c('x' = 29.187, 'y' =  76.150, 'z' = 54.973)
   # P2 <- c('x' = 10.493, 'y' = -37.222, 'z' = -4.964)
   
   # This functions applies the euclidean distance as:
@@ -355,13 +356,27 @@ ggsave(filename = "Fig3C_Gradient_WT_Dex4_Line.pdf", path = pdf_dir_fig3,
        width = 5.15, height = 5)
 ```
 
-Make also a smaller figure removing the very first and last fractions, a zoom-in version
+Make also a smaller figure removing the first and second as well as the penultimate and last fractions, a zoom-in version of the plot. Also remove EZH2 for simplicity
 
-```{r, gradient zoomed in, message = FALSE, warning = FALSE, fig.width = 2.05, fig.height = 1.9}
-p_wt_dex_frac_wb +
-  scale_x_continuous(breaks = seq(2, 24, 2), limits = c(4, 20), 
-                     expand = expansion(add = 0.25, mult = 0) ) +
-  theme(legend.position = c(0.10, 0.96)) -> p_wt_dex_frac_zoom
+```{r, gradient zoomed in, message = FALSE, warning = FALSE, fig.width = 1.9, fig.height = 2.05}
+subset(fractionation_wb, Protein != 'EZH2') |>
+  mutate(Protein = factor(Protein, levels = c('SUZ12', 'JARID2', 'AEBP2', 'EPOP', 'MTF2') ) ) |>
+  ggplot() +
+    aes(x = Fraction, y = Intensity) +
+    facet_grid(rows = vars(Protein) ) +
+    geom_line(aes( color = line), linewidth = 0.25, linetype = 'solid') +
+    geom_point(aes(fill = line), size = 1.25, shape = 21, stroke = 0.2, colour = 'black') +
+    scale_x_continuous(breaks = seq(2, 24, 2), limits = c(6, 18),
+                       expand = expansion(add = 0.25, mult = 0) ) +
+    scale_y_continuous(breaks = c(0, 0.5, 1), expand = expansion(add = c(0, 0.1), mult = 0) ) +
+    scale_color_manual(values = c('WT' = "#377AA3", '∆ex4' = "#F7CB48") ) +
+    scale_fill_manual(values = c('WT' = "#377AA3", '∆ex4' = "#F7CB48") ) +
+    coord_cartesian(ylim = c(0, 1)) +
+    labs(x = 'Fractions', y = 'Relative WB intensity') +
+    theme_bw(base_size = 14) +
+    gradients_theme +
+    theme(legend.position.inside = c(0.16, 0.95),
+          axis.title.x = element_text(margin = margin(t = -0.95, unit = 'mm') )) -> p_wt_dex_frac_zoom
 p_wt_dex_frac_zoom
 ```
 
@@ -370,7 +385,7 @@ Save to pdf
 ```{r, save zoomed it, message = FALSE, warning = FALSE}
 ggsave(filename = "Fig3C_Gradient_WT_Dex4_ZOOMED_Line.pdf", path = pdf_dir_fig3, 
        plot = p_wt_dex_frac_zoom, device = cairo_pdf, units = 'cm', 
-       width = 5.0, height = 5)
+       width = 2.45, height = 4.25)
 ```
 
 ### KO rescue samples: flag-tagged SUZ12
