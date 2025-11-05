@@ -20,16 +20,18 @@ If you use our work, please cite us appropriately.
 
 [Molecular Cell](https://doi.org/10.1016/j.molcel.2024.02.011)
 
-> Arecco N.<sup>†</sup>, Mocavini I.<sup>†</sup>, Blanco E., Ballaré C., Libman E., Bonnal S., Irimia M.<sup>§</sup>, & Di Croce L.<sup>§</sup> (2024). 
+> Arecco N.^†*^ , Mocavini I^†^, Blanco E., Ballaré C., Libman E., Bonnal S., Irimia M.^§*^ & Di Croce L.^§*^ February 12, 2024 (2024). 
 > *Alternative Splicing Decouples Local from Global PRC2 Activity* **Mol Cell**.
 > DOI: 10.1016/j.molcel.2024.02.011
 > PMID: 38452766
+> ^†^Co-first; ^§^Co-last;^*^ Correspondance
 
 [BioRχiv](https://www.biorxiv.org/content/10.1101/2023.04.30.538846v1)
 
-> Arecco N.<sup>†</sup>, Mocavini I.<sup>†</sup>, Blanco E., Ballaré C., Bonnal S., Irimia M.<sup>§</sup>, & Di Croce L.<sup>§</sup> (2023). 
+> Arecco N.^†*^, Mocavini I^†^, Blanco E., Ballaré C., Bonnal S., Irimia M.^§*^ , & Di Croce L.^§*^ (2023). 
 > *Alternative Splicing Decouples Local from Global PRC2 Activity* **BioRχiv**.
 > DOI: 10.1101/2023.04.30.538846
+> ^†^Co-first; ^§^Co-last;^*^ Correspondance
 
 # Related links
 
